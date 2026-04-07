@@ -1,0 +1,33 @@
+<h2>T1 Refined with Network Line</h2>
+<p class="subtitle">Top keeps the clean CPU / MEM labels. Bottom replaces the solid bar with a simple network-style trend line.</p>
+
+<div class="cards">
+  <div class="card" data-choice="t1-net" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="display:flex;align-items:center;justify-content:center;height:240px;background:linear-gradient(135deg,#dbeafe 0%,#bfdbfe 100%);border-radius:24px;">
+        <div style="width:160px;height:160px;border-radius:38px;background:linear-gradient(180deg,#eff6ff 0%,#dbeafe 100%);box-shadow:0 24px 48px rgba(30,64,175,.18);position:relative;">
+          <div style="position:absolute;left:24px;right:24px;top:24px;bottom:24px;border:5px solid #1d4ed8;border-radius:22px;"></div>
+          <div style="position:absolute;left:32px;top:44px;width:40px;height:30px;border-radius:10px;background:#1d4ed8;color:#eff6ff;font:700 11px/30px -apple-system;text-align:center;letter-spacing:.4px;">CPU</div>
+          <div style="position:absolute;left:78px;top:44px;width:40px;height:30px;border-radius:10px;background:#38bdf8;color:#0f172a;font:700 11px/30px -apple-system;text-align:center;letter-spacing:.4px;">MEM</div>
+          <svg viewBox="0 0 100 40" style="position:absolute;left:30px;right:30px;bottom:32px;height:34px;overflow:visible;">
+            <polyline
+              points="4,30 18,28 30,14 44,22 58,10 72,16 90,6"
+              fill="none"
+              stroke="#1e40af"
+              stroke-width="5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+            <circle cx="30" cy="14" r="3.5" fill="#1d4ed8"></circle>
+            <circle cx="58" cy="10" r="3.5" fill="#2563eb"></circle>
+            <circle cx="90" cy="6" r="3.5" fill="#38bdf8"></circle>
+          </svg>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>T1-Net</h3>
+      <p>上半部分直接表达 CPU / MEM，下半部分用网络折线表达实时流量和监控感。</p>
+    </div>
+  </div>
+</div>

@@ -1,8 +1,8 @@
+*.DS_Store
 *.vscode
 *.log
 *.agent
 *.claude
-*.superpowers
 *.spec
 *.zip
 *dist
@@ -10,7 +10,6 @@
 *assets
 *test 
 *tests
-*docs
 *__pycache__
 *build_app.sh
 *setup.py
