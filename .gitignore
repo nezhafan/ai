@@ -1,0 +1,16 @@
+*.vscode
+*.log
+*.agent
+*.claude
+*.superpowers
+*.spec
+*.zip
+*dist
+*build
+*assets
+*test 
+*tests
+*docs
+*__pycache__
+*build_app.sh
+*setup.py
