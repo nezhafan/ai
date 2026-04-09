@@ -10,6 +10,7 @@
 *assets
 *test 
 *tests
+*node_modules
 *__pycache__
 *build_app.sh
 *setup.py
