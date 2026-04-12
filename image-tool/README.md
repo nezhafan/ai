@@ -2,7 +2,7 @@
 
 一个基于 Tauri 开发的 macOS 原生图片处理应用，所有处理在本地完成，图片不会上传到服务器。
 
-![Image Tool](./demo.png)
+![](./demo.png)
 
 ## 功能
 
