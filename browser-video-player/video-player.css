@@ -1,0 +1,594 @@
+.svp-player {
+  --svp-accent: #00aeec;
+  --svp-accent-strong: #39c3f3;
+  --svp-bg: rgba(9, 12, 18, 0.92);
+  --svp-panel: rgba(15, 19, 28, 0.86);
+  --svp-text: #f8fafc;
+  --svp-muted: rgba(248, 250, 252, 0.74);
+  --svp-track: rgba(255, 255, 255, 0.18);
+  --svp-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+  position: relative;
+  display: inline-block;
+  width: min(100%, 960px);
+  background:
+    radial-gradient(circle at top, rgba(255, 138, 0, 0.2), transparent 42%),
+    linear-gradient(180deg, #141824 0%, #090c12 100%);
+  border-radius: 18px;
+  overflow: hidden;
+  box-shadow: var(--svp-shadow);
+  color: var(--svp-text);
+  isolation: isolate;
+  cursor: default;
+}
+
+.svp-player.svp-empty {
+  width: min(100%, 854px);
+  aspect-ratio: 16 / 9;
+}
+
+.svp-player video {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: #000;
+  outline: none;
+}
+
+.svp-player.svp-empty video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.svp-player.svp-ready video {
+  border-radius: inherit;
+}
+
+.svp-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  background: linear-gradient(
+    180deg,
+    rgba(3, 5, 10, 0) 0%,
+    rgba(3, 5, 10, 0.12) 48%,
+    rgba(3, 5, 10, 0.82) 100%
+  );
+  opacity: 1;
+  transition: opacity 180ms ease;
+  pointer-events: none;
+}
+
+.svp-header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding: 18px 18px 0;
+  pointer-events: none;
+}
+
+.svp-title {
+  display: none;
+  max-width: min(60%, 420px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--svp-text);
+  font: 600 14px/1.2 "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  letter-spacing: 0.02em;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+}
+
+.svp-player.svp-has-title .svp-title {
+  display: block;
+}
+
+.svp-player.svp-idle .svp-overlay {
+  opacity: 0;
+}
+
+.svp-player.svp-empty .svp-overlay,
+.svp-player.svp-seeking .svp-overlay,
+.svp-player.svp-volume-active .svp-overlay,
+.svp-player.svp-show-center-icon .svp-overlay {
+  opacity: 1;
+}
+
+.svp-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.svp-controls {
+  width: 100%;
+  padding: 20px 18px 16px;
+  display: grid;
+  gap: 12px;
+  pointer-events: auto;
+  transform: translateY(0);
+  transition:
+    opacity 220ms ease,
+    transform 220ms ease;
+}
+
+.svp-progress {
+  position: relative;
+  width: 100%;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--svp-track);
+  cursor: pointer;
+  transition: height 140ms ease;
+}
+
+.svp-progress:hover,
+.svp-progress:focus-visible {
+  height: 8px;
+}
+
+.svp-progress-bar,
+.svp-progress-buffer {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  width: 0;
+}
+
+.svp-progress-buffer {
+  background: rgba(255, 255, 255, 0.24);
+}
+
+.svp-progress-bar {
+  background: linear-gradient(90deg, var(--svp-accent), var(--svp-accent-strong));
+}
+
+.svp-progress-thumb {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 0 4px rgba(0, 174, 236, 0.18);
+  transform: translate(-50%, -50%);
+  transition: transform 140ms ease;
+}
+
+.svp-progress:hover .svp-progress-thumb,
+.svp-progress:focus-visible .svp-progress-thumb {
+  transform: translate(-50%, -50%) scale(1.08);
+}
+
+.svp-bottom {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 12px;
+}
+
+.svp-left,
+.svp-center,
+.svp-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.svp-center {
+  justify-content: center;
+}
+
+.svp-right {
+  justify-content: flex-end;
+}
+
+.svp-time {
+  min-width: 108px;
+  color: var(--svp-muted);
+  font: 500 13px/1.2 "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  letter-spacing: 0.02em;
+}
+
+.svp-spacer {
+  flex: 1 1 auto;
+}
+
+.svp-btn {
+  appearance: none;
+  border: 0;
+  width: 38px;
+  height: 38px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--svp-text);
+  background: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(8px);
+  transition:
+    transform 140ms ease,
+    background 140ms ease,
+    opacity 140ms ease;
+}
+
+.svp-btn:hover,
+.svp-btn:focus-visible {
+  background: rgba(255, 255, 255, 0.18);
+  transform: translateY(-1px);
+}
+
+.svp-btn:active {
+  transform: translateY(0);
+}
+
+.svp-btn svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+}
+
+.svp-btn-rate {
+  width: auto;
+  min-width: 58px;
+  padding: 0 12px;
+  font: 600 13px/1 "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+.svp-btn.svp-btn-play {
+  width: 42px;
+  height: 42px;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.svp-btn.svp-btn-play:hover,
+.svp-btn.svp-btn-play:focus-visible {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.svp-volume {
+  display: flex;
+  align-items: center;
+  position: relative;
+}
+
+.svp-volume::before,
+.svp-speed::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 100%;
+  width: 56px;
+  height: 14px;
+  transform: translateX(-50%);
+}
+
+.svp-volume-panel {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 4px);
+  width: 46px;
+  padding: 8px 6px 10px;
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  background: rgba(15, 19, 28, 0.94);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.28);
+  opacity: 0;
+  transform: translate(-50%, 8px);
+  pointer-events: none;
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease;
+}
+
+.svp-volume:hover .svp-volume-panel,
+.svp-volume:focus-within .svp-volume-panel,
+.svp-volume.svp-volume-open .svp-volume-panel {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  pointer-events: auto;
+}
+
+.svp-volume-value {
+  color: var(--svp-muted);
+  font: 600 12px/1 "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+.svp-volume-slider {
+  width: 88px;
+  height: 4px;
+  margin: 42px 0;
+  transform: rotate(-90deg);
+  accent-color: rgba(255, 255, 255, 0.62);
+  cursor: pointer;
+  opacity: 0.88;
+}
+
+.svp-center-toggle {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.svp-empty-state {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.svp-empty-state button {
+  appearance: none;
+  border: 0;
+  border-radius: 999px;
+  padding: 16px 30px;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.14);
+  box-shadow:
+    0 18px 36px rgba(0, 0, 0, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(10px);
+  font: 700 16px/1 "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  transition:
+    transform 160ms ease,
+    box-shadow 160ms ease,
+    filter 160ms ease;
+}
+
+.svp-empty-state button:hover,
+.svp-empty-state button:focus-visible {
+  transform: translateY(-2px);
+  filter: brightness(1.08);
+  box-shadow:
+    0 22px 42px rgba(0, 0, 0, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+
+.svp-empty-state svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+  opacity: 0.92;
+}
+
+.svp-center-toggle button {
+  appearance: none;
+  border: 0;
+  width: 74px;
+  height: 74px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(10, 13, 20, 0.56);
+  color: #fff;
+  backdrop-filter: blur(10px);
+  transform: scale(0.9);
+  opacity: 0;
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease;
+  pointer-events: auto;
+}
+
+.svp-center-toggle svg {
+  width: 28px;
+  height: 28px;
+  fill: currentColor;
+}
+
+.svp-player.svp-paused .svp-center-toggle button,
+.svp-player.svp-show-center-icon .svp-center-toggle button {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.svp-player.svp-empty .svp-controls,
+.svp-player.svp-empty .svp-center-toggle {
+  display: none;
+}
+
+.svp-player.svp-empty .svp-empty-state {
+  display: flex;
+}
+
+.svp-speed {
+  position: relative;
+}
+
+.svp-speed-menu {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 4px);
+  display: grid;
+  gap: 6px;
+  min-width: 72px;
+  padding: 6px;
+  border-radius: 14px;
+  background: rgba(15, 19, 28, 0.94);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.28);
+  opacity: 0;
+  transform: translate(-50%, 8px);
+  pointer-events: none;
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease;
+}
+
+.svp-speed:hover .svp-speed-menu,
+.svp-speed:focus-within .svp-speed-menu,
+.svp-speed.svp-speed-open .svp-speed-menu {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  pointer-events: auto;
+}
+
+.svp-speed.svp-speed-force-hide .svp-speed-menu {
+  opacity: 0;
+  transform: translate(-50%, 8px);
+  pointer-events: none;
+}
+
+.svp-speed-option {
+  appearance: none;
+  border: 0;
+  padding: 9px 10px;
+  border-radius: 10px;
+  text-align: center;
+  color: var(--svp-text);
+  background: transparent;
+  cursor: pointer;
+  font: 500 13px/1 "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+.svp-speed-option:hover,
+.svp-speed-option:focus-visible,
+.svp-speed-option.svp-active {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.svp-player.svp-fullscreen.svp-fullscreen-idle {
+  cursor: none;
+}
+
+.svp-player.svp-fullscreen.svp-fullscreen-idle .svp-controls {
+  opacity: 0;
+  transform: translateY(22px);
+  pointer-events: none;
+}
+
+.svp-player:fullscreen,
+.svp-player.svp-fullscreen {
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+}
+
+.svp-player:fullscreen video,
+.svp-player.svp-fullscreen video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+@media (max-width: 640px) {
+  .svp-controls {
+    padding: 16px 12px 12px;
+  }
+
+  .svp-bottom {
+    grid-template-columns: 1fr;
+    justify-items: center;
+  }
+
+  .svp-left,
+  .svp-center,
+  .svp-right {
+    width: 100%;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  .svp-right {
+    justify-content: center;
+  }
+
+  .svp-volume-panel {
+    left: 50%;
+    transform: translate(-50%, 8px);
+  }
+
+  .svp-volume:hover .svp-volume-panel,
+  .svp-volume:focus-within .svp-volume-panel,
+  .svp-volume.svp-volume-open .svp-volume-panel {
+    transform: translate(-50%, 0);
+  }
+}
+
+body.svp-demo-page {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top left, rgba(255, 106, 0, 0.18), transparent 30%),
+    radial-gradient(circle at bottom right, rgba(59, 130, 246, 0.16), transparent 28%),
+    linear-gradient(180deg, #f7efe5 0%, #e8edf7 100%);
+  color: #131722;
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+.svp-demo {
+  width: min(1000px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 40px 0 64px;
+}
+
+.svp-demo h1 {
+  margin: 0 0 12px;
+  font-size: clamp(28px, 4vw, 44px);
+}
+
+.svp-demo p {
+  margin: 0 0 24px;
+  color: #3c4659;
+  line-height: 1.7;
+}
+
+.svp-demo-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 22px;
+}
+
+.svp-demo-toolbar button,
+.svp-demo-toolbar label {
+  border: 0;
+  border-radius: 999px;
+  padding: 12px 18px;
+  font: 600 14px/1 "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: #131722;
+  color: #fff;
+  cursor: pointer;
+}
+
+.svp-demo-toolbar label {
+  display: inline-flex;
+  align-items: center;
+}
+
+.svp-demo-toolbar input[type="file"] {
+  display: none;
+}
+
+.svp-demo-card {
+  padding: 20px;
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.7);
+  box-shadow: 0 24px 70px rgba(17, 24, 39, 0.08);
+  backdrop-filter: blur(16px);
+}
