@@ -1,0 +1,131 @@
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background: #090c12;
+  color: #f8fafc;
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+body {
+  min-height: 100vh;
+  overflow: hidden;
+}
+
+#app {
+  min-height: 100vh;
+}
+
+.app-shell {
+  box-sizing: border-box;
+  min-height: 100vh;
+  padding: 0;
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-start;
+}
+
+.app-status {
+  position: fixed;
+  left: 16px;
+  right: 16px;
+  bottom: 16px;
+  z-index: 20;
+  color: #ffbf91;
+  font-size: 14px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.app-status:empty {
+  display: none;
+}
+
+.player-host {
+  width: 100%;
+  min-height: 100vh;
+  padding: 0 5px;
+  box-sizing: border-box;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.player-host .svp-player,
+.player-host video {
+  max-width: 100%;
+}
+
+.player-host .svp-player,
+.player-host .svp-player:focus,
+.player-host .svp-player:focus-visible,
+.player-host .svp-player *:focus,
+.player-host .svp-player *:focus-visible {
+  outline: none;
+}
+
+.player-host .svp-player {
+  width: min(100%, calc(100vw - 10px));
+  height: auto;
+  background: #000;
+  box-shadow: none;
+  border-radius: 0;
+  max-width: 100%;
+  max-height: 100vh;
+}
+
+.player-host .svp-player video {
+  width: 100%;
+  height: auto;
+  max-height: 100vh;
+  max-width: 100%;
+  object-fit: contain;
+  background: #000;
+}
+
+.player-host .svp-player.svp-empty {
+  width: 100%;
+  max-width: 100%;
+  aspect-ratio: auto;
+  min-height: 100vh;
+}
+
+.player-host .svp-player.svp-loading {
+  width: 100%;
+  max-width: 100%;
+  min-height: 100vh;
+}
+
+.player-host .svp-player.svp-loading video {
+  visibility: hidden;
+}
+
+.player-host .svp-player.svp-ready {
+  width: min(100%, calc(100vw - 10px));
+  min-height: 0;
+}
+
+.player-host .svp-player.svp-ready video {
+  width: 100%;
+  height: auto;
+  max-height: 100vh;
+}
+
+.player-host .svp-player.svp-fullscreen,
+.player-host .svp-player.window-fullscreen {
+  width: 100vw;
+  height: 100vh;
+}
+
+.player-host .svp-player.svp-fullscreen video,
+.player-host .svp-player.window-fullscreen video {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+}
+
+@media (max-width: 768px) {
+  .app-shell {
+    padding: 0;
+  }
+}

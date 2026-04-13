@@ -1,236 +1,55 @@
-# Wails Local Video Player Design
+# Wails 本地视频播放器设计文档
 
-## Overview
+## 目标
 
-Build a cross-platform desktop video player with Wails and a plain HTML/CSS/JS frontend. The app is scoped to local file playback only. It must reuse the existing visual and interaction assets under `assets/` without modifying those source files directly.
+做一个基于 Wails 的跨平台本地视频播放器，前端使用原生 HTML/CSS/JS，不使用 React。播放器只支持本地文件，通过按钮打开系统文件选择器选择视频。
 
-Confirmed constraints:
+## 约束
 
-- Frontend uses plain HTML/CSS/JS, not React.
-- Local file playback only.
-- File selection starts from a button-driven system picker.
-- Persist volume and playback rate.
-- Do not persist playback history or recently opened files.
-- Preserve keyboard shortcuts.
-- Do not edit `assets/video-player.js` or `assets/video-player.css`; add new files instead.
+- 只播放本地文件。
+- 保留键盘快捷键。
+- 持久化保存音量和倍速。
+- 不保存播放历史、最近文件和播放进度。
+- 不修改 `assets/video-player.js` 和 `assets/video-player.css`，只新增适配文件。
 
-## Goals
+## 方案
 
-- Launch as a Wails desktop app on supported platforms.
-- Show an empty-state player UI on startup.
-- Let the user choose a local video file through the system file picker.
-- Start playback in the existing styled player once a file is selected.
-- Preserve volume and playback rate across app restarts.
-- Keep the original player look and core interactions from the existing assets.
+- Wails Go 后端提供 `OpenVideoFile()`，用于打开系统文件选择器并返回文件路径。
+- 前端使用一个 HTML 入口页加载播放器。
+- 直接复用 `assets/video-player.css` 作为基础样式。
+- 新增一个前端脚本实现播放器逻辑、Wails 调用、快捷键和本地存储。
+- 不直接把 `assets/video-player.js` 当主逻辑运行，而是在新文件里对照复用其中必要行为。
 
-## Non-Goals
+## 交互
 
-- No React frontend.
-- No network URL playback.
-- No playlist support.
-- No playback history, recent files, or resume position.
-- No media library, thumbnails, or metadata extraction.
-- No codec workarounds beyond what the platform WebView already supports.
+- 启动后显示空状态和“打开本地视频”按钮。
+- 选中文件后开始播放，并显示文件名。
+- 支持播放/暂停、进度拖动、音量、倍速、全屏、控制栏自动隐藏。
+- 快捷键如下：
+  - `Space`：播放/暂停
+  - `ArrowLeft`：后退 5 秒
+  - `ArrowRight`：前进 5 秒
+  - `ArrowUp`：提高音量
+  - `ArrowDown`：降低音量
+  - `F`：切换全屏
 
-## Architecture
+## 状态
 
-### Backend
+- 持久化：`volume`、`playbackRate`
+- 不持久化：当前文件、播放位置、历史记录、最近文件、全屏状态
 
-The Wails Go backend provides desktop-only capabilities:
+## 错误处理
 
-- `OpenVideoFile()`: opens the system file picker and returns the selected file path.
-- File filter: allow common video extensions such as `.mp4`, `.mov`, `.m4v`, `.webm`, `.mkv`, and `.avi`.
-- If the user cancels the picker, return an empty result rather than treating it as an error.
+- 用户取消选文件时不报错。
+- 文件无法播放时显示简短提示，并允许重新选择文件。
+- `localStorage` 失败时静默降级。
 
-The backend does not manage playback state, media controls, or persistence of frontend settings.
+## 验收标准
 
-### Frontend
-
-The frontend is a minimal Wails web app composed of static HTML plus plain JavaScript:
-
-- A root HTML page initializes the player shell.
-- `assets/video-player.css` is loaded as the base visual layer.
-- A new app-specific stylesheet adds window layout, empty-state integration details, and lightweight app-level status styling.
-- A new app-specific script initializes the player, bridges to Wails runtime calls, and layers desktop behavior on top of the existing asset patterns.
-
-### Asset Strategy
-
-The original asset files remain unchanged:
-
-- `assets/video-player.css`
-- `assets/video-player.js`
-
-New files adapt the app for Wails usage. The preferred implementation is:
-
-- Reuse `assets/video-player.css` directly.
-- Do not execute `assets/video-player.js` as the main controller for the app.
-- Port or mirror only the needed behavior from the asset script into a new desktop-focused script, so the Wails bridge and persistence logic remain explicit and maintainable.
-
-This satisfies the requirement to use the existing assets while keeping the original files intact.
-
-## UI And Interaction Design
-
-### Startup State
-
-On launch, the app shows the player in an empty state:
-
-- The video area is present.
-- The central CTA invites the user to open a local video.
-- No file is preloaded.
-- No playback history is restored.
-
-### File Open Flow
-
-1. User clicks the open button in the player UI.
-2. Frontend calls `OpenVideoFile()` through the Wails bridge.
-3. If a path is returned, the frontend converts it into a valid video source for the embedded WebView.
-4. The video element loads the file and attempts playback.
-5. The title area displays the selected file name.
-
-If the picker is canceled:
-
-- The app stays in its current state.
-- No error message is shown.
-
-If the selected file cannot be played:
-
-- The app shows a concise inline error message.
-- The user can immediately try opening another file.
-
-### Player Controls
-
-The player provides:
-
-- Play and pause.
-- Progress display and seeking.
-- Current time and total duration.
-- Volume adjustment and mute state handling.
-- Playback rate switching.
-- Fullscreen toggle.
-- Auto-hide controls while idle.
-
-The interface should preserve the style and behavior patterns already expressed in the asset files.
-
-### Keyboard Shortcuts
-
-The app preserves keyboard shortcuts:
-
-- `Space`: play or pause.
-- `ArrowLeft`: seek backward 5 seconds.
-- `ArrowRight`: seek forward 5 seconds.
-- `ArrowUp`: increase volume.
-- `ArrowDown`: decrease volume.
-- `F`: toggle fullscreen.
-
-Shortcut handling must ignore editable targets if focus is on an interactive text-capable element in the future.
-
-## State Management
-
-### Persistent State
-
-Persist in `localStorage`:
-
-- `volume`
-- `playbackRate`
-
-On app startup:
-
-- Read stored values.
-- Validate them.
-- Apply them to the player when the video element initializes.
-
-On user change:
-
-- Save the latest volume value.
-- Save the latest playback rate value.
-
-### Ephemeral State
-
-Do not persist:
-
-- Current file path.
-- Playback position.
-- Playback history.
-- Recent files.
-- Fullscreen status.
-
-## Wails Integration Details
-
-The project will use a standard Wails application layout with:
-
-- Go app entrypoint and backend method binding.
-- A frontend directory served by Wails.
-- JS bindings generated by Wails for calling backend methods from the browser context.
-
-The frontend should rely on generated Wails bindings rather than manual ad hoc bridge code where possible.
-
-## File Plan
-
-Expected high-level additions:
-
-- Wails app bootstrap files.
-- Backend Go file exposing `OpenVideoFile()`.
-- Frontend HTML entrypoint.
-- New frontend JavaScript controller for player bootstrapping and desktop behavior.
-- New frontend CSS file for app-shell adjustments.
-- Wails config and build files required for a runnable desktop app.
-
-The implementation should keep the original `assets` files untouched and reference them from the new frontend entrypoint.
-
-## Error Handling
-
-- Canceling file selection is a normal path, not an error.
-- Invalid or unsupported files should produce a short visible error state.
-- Persistence failures in `localStorage` should fail silently and not block playback.
-- Fullscreen actions should degrade gracefully if not available in the current platform WebView.
-
-## Cross-Platform Considerations
-
-The app is intended to be cross-platform at the Wails layer, but playback support still depends on the platform WebView media stack. The design assumes:
-
-- Common H.264/AAC MP4 playback is the primary happy path.
-- Some codecs or containers may fail on specific platforms.
-- The app surfaces playback failure but does not attempt transcoding or fallback decoding.
-
-## Testing Strategy
-
-The implementation will verify:
-
-- Wails project compiles successfully.
-- Frontend assets load correctly.
-- The open-file button triggers the system picker.
-- Selecting a valid local file loads it into the player.
-- Playback controls operate correctly.
-- Keyboard shortcuts work for play/pause, seek, volume, and fullscreen.
-- Volume persists after app restart.
-- Playback rate persists after app restart.
-- Original asset files remain unchanged.
-
-## Acceptance Criteria
-
-- Launching the app shows a local-video player empty state.
-- Clicking the open button invokes the system file picker.
-- Choosing a valid local video starts playback in the player.
-- The file name is shown in the player header.
-- Controls for progress, volume, playback rate, and fullscreen work.
-- Keyboard shortcuts work as defined.
-- Restarting the app preserves volume and playback rate.
-- No playback history or recent file list is stored.
-- `assets/video-player.js` and `assets/video-player.css` are not modified.
-
-## Risks And Tradeoffs
-
-- Plain DOM code is the right fit for this scope, but it is less extensible than a component-based frontend if the app later grows into playlists, settings pages, or a media library.
-- Reusing the existing CSS is low risk; reusing the existing JS as-is is higher risk because it was written for a plain webpage rather than a Wails-integrated desktop app.
-- Local file playback behavior can vary by platform because Wails relies on the system WebView.
-
-## Recommended Next Step
-
-After spec approval, create an implementation plan for:
-
-1. Wails project scaffolding.
-2. Backend file-picker API.
-3. Frontend player shell and asset wiring.
-4. Local settings persistence.
-5. Keyboard shortcut support.
-6. Verification of launch, playback, and persistence behavior.
+- 应用启动后能看到播放器空状态。
+- 点击按钮能打开系统文件选择器。
+- 选择本地视频后能够播放。
+- 文件名能显示出来。
+- 音量、倍速、进度、全屏和快捷键可用。
+- 重启应用后音量和倍速仍然保留。
+- 原始 `assets` 两个文件保持不变。

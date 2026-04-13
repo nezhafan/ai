@@ -3,13 +3,13 @@
 *.log
 *.agent
 *.claude
-*.spec
 *.zip
 *dist
 *build
 *assets
 *test 
 *tests
+*docs
 *node_modules
 *__pycache__
 *build_app.sh

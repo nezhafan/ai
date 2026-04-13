@@ -1,3 +1,5 @@
+import { getEffectiveDuration } from "./video-duration.js";
+
 (function () {
   "use strict";
 
@@ -339,6 +341,7 @@
       revokeObjectUrl();
       state.objectUrl = URL.createObjectURL(file);
       state.hasSelection = true;
+      delete video.dataset.svpExpectedDuration;
       video.dataset.svpLocalFileName = file.name;
       video.src = state.objectUrl;
       video.load();
@@ -449,7 +452,7 @@
     }
 
     function syncTime() {
-      var duration = Number.isFinite(video.duration) ? video.duration : 0;
+      var duration = getEffectiveDuration(video);
       var current = Number.isFinite(video.currentTime) ? video.currentTime : 0;
       var ratio = duration > 0 ? current / duration : 0;
       currentNode.textContent = formatTime(current);
@@ -460,13 +463,14 @@
     }
 
     function syncBuffered() {
-      if (!video.buffered || !video.buffered.length || !Number.isFinite(video.duration) || video.duration <= 0) {
+      var duration = getEffectiveDuration(video);
+      if (!video.buffered || !video.buffered.length || duration <= 0) {
         progressBuffer.style.width = "0%";
         return;
       }
 
       var end = video.buffered.end(video.buffered.length - 1);
-      progressBuffer.style.width = clamp(end / video.duration, 0, 1) * 100 + "%";
+      progressBuffer.style.width = clamp(end / duration, 0, 1) * 100 + "%";
     }
 
     function syncVolume() {
@@ -538,10 +542,11 @@
     }
 
     function seekBy(delta) {
-      if (!Number.isFinite(video.duration) || video.duration <= 0) {
+      var duration = getEffectiveDuration(video);
+      if (duration <= 0) {
         return;
       }
-      video.currentTime = clamp(video.currentTime + delta, 0, video.duration);
+      video.currentTime = clamp(video.currentTime + delta, 0, duration);
       syncTime();
     }
 
@@ -568,6 +573,7 @@
       video.pause();
       revokeObjectUrl();
       state.hasSelection = false;
+      delete video.dataset.svpExpectedDuration;
       delete video.dataset.svpLocalFileName;
       video.removeAttribute("src");
       Array.from(video.querySelectorAll("source")).forEach(function (source) {
@@ -632,13 +638,14 @@
     }
 
     function setProgressFromClientX(clientX) {
-      if (!Number.isFinite(video.duration) || video.duration <= 0) {
+      var duration = getEffectiveDuration(video);
+      if (duration <= 0) {
         return;
       }
 
       var rect = progress.getBoundingClientRect();
       var ratio = clamp((clientX - rect.left) / rect.width, 0, 1);
-      video.currentTime = ratio * video.duration;
+      video.currentTime = ratio * duration;
       syncTime();
     }
 
