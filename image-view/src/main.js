@@ -50,8 +50,8 @@ let isAdjusting = false;
 let adjustState = {
   brightness: 0,
   contrast: 0,
-  shadows: 0,
-  highlights: 0,
+  dark: 0,
+  bright: 0,
   activeFilter: 'none'
 };
 
@@ -175,8 +175,8 @@ async function showImage(index) {
   adjustState = {
     brightness: 0,
     contrast: 0,
-    shadows: 0,
-    highlights: 0,
+    dark: 0,
+    bright: 0,
     activeFilter: "none"
   };
   hideCropRect();
@@ -371,8 +371,8 @@ async function resetView() {
   adjustState = {
     brightness: 0,
     contrast: 0,
-    shadows: 0,
-    highlights: 0,
+    dark: 0,
+    bright: 0,
     activeFilter: "none"
   };
   updateTransform();
@@ -459,10 +459,10 @@ async function getEditedCanvas() {
     ctx.putImageData(imageData, 0, 0);
   }
 
-  if (adjustState.shadows !== 0 || adjustState.highlights !== 0) {
-    console.log("[getEditedCanvas] applying shadows/highlights:", adjustState.shadows, adjustState.highlights);
+  if (adjustState.dark !== 0 || adjustState.bright !== 0) {
+    console.log("[getEditedCanvas] applying dark/bright:", adjustState.dark, adjustState.bright);
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    applyShadowsHighlights(imageData, adjustState.shadows, adjustState.highlights);
+    applyDarkBright(imageData, adjustState.dark, adjustState.bright);
     ctx.putImageData(imageData, 0, 0);
   }
 
@@ -535,8 +535,8 @@ async function saveImage() {
     adjustState = {
       brightness: 0,
       contrast: 0,
-      shadows: 0,
-      highlights: 0,
+      dark: 0,
+      bright: 0,
       activeFilter: "none"
     };
     updateTransform();
@@ -1383,10 +1383,10 @@ async function updateAdjustPreviewCanvas() {
   const pctx = previewCanvas.getContext("2d");
   pctx.drawImage($img, 0, 0, pw, ph);
 
-  // 应用阴影/高光
-  if (adjustState.shadows !== 0 || adjustState.highlights !== 0) {
+  // 应用暗部/亮部
+  if (adjustState.dark !== 0 || adjustState.bright !== 0) {
     const imageData = pctx.getImageData(0, 0, pw, ph);
-    applyShadowsHighlights(imageData, adjustState.shadows, adjustState.highlights);
+    applyDarkBright(imageData, adjustState.dark, adjustState.bright);
     pctx.putImageData(imageData, 0, 0);
   }
 
@@ -1438,13 +1438,13 @@ function hideAdjustPreview() {
 function updateAdjustUI() {
   document.getElementById("val-brightness").textContent = adjustState.brightness;
   document.getElementById("val-contrast").textContent = adjustState.contrast;
-  document.getElementById("val-shadows").textContent = adjustState.shadows;
-  document.getElementById("val-highlights").textContent = adjustState.highlights;
+  document.getElementById("val-dark").textContent = adjustState.dark;
+  document.getElementById("val-bright").textContent = adjustState.bright;
 
   document.getElementById("slider-brightness").value = adjustState.brightness;
   document.getElementById("slider-contrast").value = adjustState.contrast;
-  document.getElementById("slider-shadows").value = adjustState.shadows;
-  document.getElementById("slider-highlights").value = adjustState.highlights;
+  document.getElementById("slider-dark").value = adjustState.dark;
+  document.getElementById("slider-bright").value = adjustState.bright;
 
   document.querySelectorAll(".filter-item").forEach((el) => {
     el.classList.toggle("active", el.dataset.filter === adjustState.activeFilter);
@@ -1456,8 +1456,8 @@ function updateAdjustUI() {
 function hasAdjustChanges() {
   return adjustState.brightness !== 0 ||
          adjustState.contrast !== 0 ||
-         adjustState.shadows !== 0 ||
-         adjustState.highlights !== 0 ||
+         adjustState.dark !== 0 ||
+         adjustState.bright !== 0 ||
          adjustState.activeFilter !== 'none';
 }
 
@@ -1479,26 +1479,44 @@ function applyBrightnessContrast(imageData, brightness, contrast) {
   }
 }
 
-// 阴影/高光调整（色调分离）
-function applyShadowsHighlights(imageData, shadows, highlights) {
+// 暗部/亮部调整（色调分离）
+// 暗部：0~80 完全应用，80~170 平滑过渡，>170 不应用
+// 亮部：170~255 完全应用，80~170 平滑过渡，<80 不应用
+function applyDarkBright(imageData, dark, bright) {
   const data = imageData.data;
-  const shadowsFactor = shadows / 50;
-  const highlightsFactor = highlights / 50;
+  const darkFactor = dark / 50;
+  const brightFactor = bright / 50;
+
+  // 亮度阈值
+  const darkThreshold = 80 / 255;   // 0.314
+  const brightThreshold = 170 / 255; // 0.667
+  const softWidth = 25 / 255;        // 软过渡宽度
+
+  // Sigmoid 软过渡函数
+  const sigmoid = (x, center, width) => {
+    const k = 8 / width; // 陡峭度
+    return 1 / (1 + Math.exp(-k * (x - center)));
+  };
 
   for (let i = 0; i < data.length; i += 4) {
     const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-    const normalizedLum = lum / 255;
+    const nl = lum / 255;
 
-    let shadowAdj = 0,
-      highlightAdj = 0;
+    let darkAdj = 0, brightAdj = 0;
 
-    if (normalizedLum < 0.5) {
-      shadowAdj = shadowsFactor * (1 - normalizedLum * 2);
-    } else {
-      highlightAdj = highlightsFactor * ((normalizedLum - 0.5) * 2);
+    // 暗部调整：<80 完全应用，80~170 平滑过渡，>170 不应用
+    if (nl < darkThreshold + softWidth) {
+      const t = sigmoid(nl, darkThreshold, softWidth);
+      darkAdj = darkFactor * (1 - t);
     }
 
-    const factor = 1 + shadowAdj + highlightAdj;
+    // 亮部调整：>170 完全应用，80~170 平滑过渡，<80 不应用
+    if (nl > brightThreshold - softWidth) {
+      const t = sigmoid(nl, brightThreshold, softWidth);
+      brightAdj = brightFactor * t;
+    }
+
+    const factor = 1 + darkAdj + brightAdj;
 
     for (let c = 0; c < 3; c++) {
       data[i + c] = Math.max(0, Math.min(255, data[i + c] * factor));
@@ -1604,14 +1622,14 @@ document.getElementById("slider-contrast").addEventListener("input", (e) => {
   markAdjustChanges();
 });
 
-document.getElementById("slider-shadows").addEventListener("input", (e) => {
-  adjustState.shadows = parseInt(e.target.value, 10);
+document.getElementById("slider-dark").addEventListener("input", (e) => {
+  adjustState.dark = parseInt(e.target.value, 10);
   updateAdjustUI();
   markAdjustChanges();
 });
 
-document.getElementById("slider-highlights").addEventListener("input", (e) => {
-  adjustState.highlights = parseInt(e.target.value, 10);
+document.getElementById("slider-bright").addEventListener("input", (e) => {
+  adjustState.bright = parseInt(e.target.value, 10);
   updateAdjustUI();
   markAdjustChanges();
 });
@@ -1669,8 +1687,8 @@ document.getElementById("btn-reset-adjust").addEventListener("click", async () =
   adjustState = {
     brightness: 0,
     contrast: 0,
-    shadows: 0,
-    highlights: 0,
+    dark: 0,
+    bright: 0,
     activeFilter: "none"
   };
   updateAdjustUI();
