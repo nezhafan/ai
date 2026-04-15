@@ -9,5 +9,16 @@
   "author": {
     "name": "liujinliang",
     "email": "772532526@qq.com"
-  }
+  },
+  "fileAssociations": [
+    {"ext": "mp4", "name": "MP4 Video", "role": "Viewer", "description": "MP4 video file"},
+    {"ext": "mov", "name": "QuickTime Movie", "role": "Viewer", "description": "QuickTime video file"},
+    {"ext": "m4v", "name": "iTunes Video", "role": "Viewer", "description": "iTunes/M4V video file"},
+    {"ext": "webm", "name": "WebM Video", "role": "Viewer", "description": "WebM video file"},
+    {"ext": "mkv", "name": "Matroska Video", "role": "Viewer", "description": "Matroska video file"},
+    {"ext": "avi", "name": "AVI Video", "role": "Viewer", "description": "AVI video file"},
+    {"ext": "ts", "name": "MPEG-TS Video", "role": "Viewer", "description": "MPEG-TS transport stream file"},
+    {"ext": "mts", "name": "AVCHD TS Video", "role": "Viewer", "description": "MPEG transport stream video file"},
+    {"ext": "m2ts", "name": "Blu-ray TS Video", "role": "Viewer", "description": "MPEG-2 transport stream video file"}
+  ]
 }

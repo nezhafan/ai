@@ -75,3 +75,32 @@ func putU32(buf []byte, offset int, value uint32) {
 	buf[offset+2] = byte(value >> 8)
 	buf[offset+3] = byte(value)
 }
+
+func TestResolveOpenedFileFromArgsSkipsProcessSerialAndFindsVideo(t *testing.T) {
+	tempDir := t.TempDir()
+	videoPath := filepath.Join(tempDir, "demo.ts")
+	if err := os.WriteFile(videoPath, []byte("fake ts"), 0o644); err != nil {
+		t.Fatalf("write test ts file: %v", err)
+	}
+
+	args := []string{"video-player", "-psn_0_12345", videoPath}
+	got := resolveOpenedFileFromArgs(args)
+	if got != videoPath {
+		t.Fatalf("expected %q, got %q", videoPath, got)
+	}
+}
+
+func TestResolveOpenedFileFromArgsSupportsFileURL(t *testing.T) {
+	tempDir := t.TempDir()
+	videoPath := filepath.Join(tempDir, "demo.mp4")
+	if err := os.WriteFile(videoPath, []byte("fake mp4"), 0o644); err != nil {
+		t.Fatalf("write test mp4 file: %v", err)
+	}
+
+	fileURL := (&url.URL{Scheme: "file", Path: videoPath}).String()
+	args := []string{"video-player", fileURL}
+	got := resolveOpenedFileFromArgs(args)
+	if got != videoPath {
+		t.Fatalf("expected %q, got %q", videoPath, got)
+	}
+}

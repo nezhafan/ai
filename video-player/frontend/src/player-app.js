@@ -72,7 +72,10 @@ function isEditableTarget(target) {
 }
 
 export function buildMediaURL(filePath) {
-  return `/local-media?path=${encodeURIComponent(filePath)}`;
+  // Use /local-media endpoint for local file access via backend handler
+  const normalized = filePath.replace(/\\/g, "/");
+  const encoded = encodeURIComponent(normalized);
+  return `/local-media?path=${encoded}`;
 }
 
 export function shouldToggleWindowFullscreenOnDoubleClick(target) {
@@ -195,6 +198,26 @@ async function defaultOpenVideoFile() {
   return openVideoFile();
 }
 
+async function defaultGetOpenedFile() {
+  const getOpenedFile = globalThis?.go?.main?.App?.GetOpenedFile;
+
+  if (typeof getOpenedFile !== "function") {
+    return "";
+  }
+
+  return getOpenedFile();
+}
+
+function defaultSubscribeToOpenedFile(callback) {
+  const runtime = globalThis?.window?.runtime;
+  if (!runtime || typeof runtime.EventsOn !== "function") {
+    return () => {};
+  }
+
+  const unsubscribe = runtime.EventsOn("app:file-opened", callback);
+  return typeof unsubscribe === "function" ? unsubscribe : () => {};
+}
+
 async function defaultGetVideoDuration(filePath) {
   const getVideoDuration = globalThis?.go?.main?.App?.GetVideoDuration;
 
@@ -203,6 +226,154 @@ async function defaultGetVideoDuration(filePath) {
   }
 
   return getVideoDuration(filePath);
+}
+
+function isTsFile(filePath) {
+  if (!filePath) return false;
+  const ext = filePath.split(".").pop()?.toLowerCase();
+  return ext === "ts";
+}
+
+function pickSupportedTsMimeType() {
+  if (!globalThis.MediaSource || typeof globalThis.MediaSource.isTypeSupported !== "function") {
+    return "";
+  }
+
+  const candidates = [
+    'video/mp4; codecs="avc1.64001F,mp4a.40.2"',
+    'video/mp4; codecs="avc1.4D401E,mp4a.40.2"',
+    'video/mp4; codecs="avc1.42E01E,mp4a.40.2"',
+    'video/mp4; codecs="avc1.42E01E"',
+    'audio/mp4; codecs="mp4a.40.2"',
+  ];
+
+  for (const candidate of candidates) {
+    if (globalThis.MediaSource.isTypeSupported(candidate)) {
+      return candidate;
+    }
+  }
+
+  return "";
+}
+
+async function playTsFile(video, localFilePath) {
+  if (!globalThis.MediaSource) {
+    throw new Error("当前平台不支持 TS 转码播放。");
+  }
+
+  const mimeType = pickSupportedTsMimeType();
+  if (!mimeType) {
+    throw new Error("当前平台缺少可用的 MP4 解码器。");
+  }
+
+  const muxjs = await import("mux.js");
+  const mediaUrl = buildMediaURL(localFilePath);
+  const response = await fetch(mediaUrl);
+  if (!response.ok) {
+    throw new Error(`Failed to load TS file: ${response.status}`);
+  }
+
+  const tsData = new Uint8Array(await response.arrayBuffer());
+  if (tsData.byteLength === 0) {
+    throw new Error("TS 文件为空。");
+  }
+
+  return new Promise((resolve, reject) => {
+    const mediaSource = new MediaSource();
+    const objectUrl = URL.createObjectURL(mediaSource);
+    const transmuxer = new muxjs.mp4.Transmuxer();
+
+    video.src = objectUrl;
+
+    let sourceBuffer = null;
+    let appendQueue = [];
+    let firstSegment = true;
+    let transmuxDone = false;
+    let settled = false;
+
+    const finish = (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    };
+
+    const flushQueue = () => {
+      if (!sourceBuffer || sourceBuffer.updating) {
+        return;
+      }
+
+      if (appendQueue.length > 0) {
+        sourceBuffer.appendBuffer(appendQueue.shift());
+        return;
+      }
+
+      if (transmuxDone && mediaSource.readyState === "open") {
+        try {
+          mediaSource.endOfStream();
+        } catch (_error) {
+          // ignore redundant endOfStream errors
+        }
+      }
+
+      if (transmuxDone) {
+        finish();
+      }
+    };
+
+    mediaSource.addEventListener(
+      "sourceopen",
+      () => {
+        try {
+          sourceBuffer = mediaSource.addSourceBuffer(mimeType);
+          sourceBuffer.addEventListener("updateend", flushQueue);
+          sourceBuffer.addEventListener("error", () => {
+            finish(new Error("TS SourceBuffer 追加失败。"));
+          });
+        } catch (error) {
+          finish(error);
+          return;
+        }
+
+        transmuxer.on("data", (segment) => {
+          if (!segment?.data) {
+            return;
+          }
+
+          let payload = new Uint8Array(segment.data);
+          if (firstSegment && segment.initSegment?.byteLength) {
+            const initSegment = new Uint8Array(segment.initSegment);
+            const merged = new Uint8Array(initSegment.byteLength + payload.byteLength);
+            merged.set(initSegment, 0);
+            merged.set(payload, initSegment.byteLength);
+            payload = merged;
+          }
+
+          firstSegment = false;
+          appendQueue.push(payload);
+          flushQueue();
+        });
+
+        transmuxer.on("done", () => {
+          transmuxDone = true;
+          flushQueue();
+        });
+
+        transmuxer.push(tsData);
+        transmuxer.flush();
+      },
+      { once: true },
+    );
+
+    mediaSource.addEventListener("error", () => {
+      finish(new Error("MediaSource 播放链路错误。"));
+    });
+  });
 }
 
 export function createMarkup() {
@@ -253,6 +424,8 @@ export function initPlayerApp({
   root = document.querySelector("#app"),
   openVideoFile = defaultOpenVideoFile,
   getVideoDuration = defaultGetVideoDuration,
+  getOpenedFile = defaultGetOpenedFile,
+  subscribeToOpenedFile = defaultSubscribeToOpenedFile,
   fullscreenRuntime = null,
 } = {}) {
   if (!root) {
@@ -316,7 +489,7 @@ export function initPlayerApp({
     }
   };
 
-  const applyVideoFile = async (filePath) => {
+  const applyVideoFile = async (filePath, autoPlay = true) => {
     if (!filePath) {
       return;
     }
@@ -333,13 +506,52 @@ export function initPlayerApp({
     } catch (_error) {
       delete video.dataset.svpExpectedDuration;
     }
+
+    // .ts 文件使用 Media Source Extensions 播放
+    if (isTsFile(filePath)) {
+      dispatchSelectionState(video, true, true);
+      scheduleExternalSelectionStateSync(video, true, true);
+      try {
+        await playTsFile(video, filePath);
+        if (autoPlay) {
+          // 等待 metadata 加载完成后再播放，确保 UI 已就绪
+          if (video.readyState >= 1) {
+            await video.play();
+          } else {
+            await new Promise((resolve) => {
+              video.addEventListener("loadedmetadata", resolve, { once: true });
+            });
+            await video.play();
+          }
+        }
+        scheduleExternalSelectionStateSync(video, true, false);
+      } catch (_error) {
+        scheduleExternalSelectionStateSync(video, true, false);
+        showStatus("TS 文件加载失败，请尝试其他播放器。");
+      }
+      return;
+    }
+
     video.src = buildMediaURL(filePath);
     dispatchSelectionState(video, true, true);
     scheduleExternalSelectionStateSync(video, true, true);
     video.load();
 
+    if (!autoPlay) {
+      scheduleExternalSelectionStateSync(video, true, false);
+      return;
+    }
+
+    // 等待 metadata 加载完成后再播放，确保 UI 已就绪
     try {
-      await video.play();
+      if (video.readyState >= 1) {
+        await video.play();
+      } else {
+        await new Promise((resolve) => {
+          video.addEventListener("loadedmetadata", resolve, { once: true });
+        });
+        await video.play();
+      }
       scheduleExternalSelectionStateSync(video, true, true);
     } catch (_error) {
       scheduleExternalSelectionStateSync(video, true, false);
@@ -414,6 +626,13 @@ export function initPlayerApp({
     dispatchSelectionState(video, true, false);
     scheduleExternalSelectionStateSync(video, true, false);
     clearStatus();
+    // 启动时通过文件关联打开的文件，等待 metadata 加载后自动播放
+    if (pendingAutoPlay) {
+      pendingAutoPlay = false;
+      video.play().catch(() => {
+        // 忽略播放失败，让用户手动播放
+      });
+    }
   });
   video.addEventListener("play", () => {
     scheduleExternalSelectionStateSync(video, true, false);
@@ -432,6 +651,34 @@ export function initPlayerApp({
 
   attachShortcutHandlers(video, statusNode, fullscreenRuntime ? fullscreenController : null, syncWindowFullscreenClass);
   syncWindowFullscreenClass();
+
+  // 标记是否等待 metadata 加载后自动播放（用于启动时通过文件关联打开的场景）
+  let pendingAutoPlay = false;
+
+  subscribeToOpenedFile(async (openedFile) => {
+    if (!openedFile) {
+      return;
+    }
+
+    try {
+      await applyVideoFile(openedFile);
+    } catch (_error) {
+      showStatus("文件已打开，但加载失败，请重试。");
+    }
+  });
+
+  // 检查是否有通过文件关联打开的视频文件
+  (async () => {
+    try {
+      const openedFile = await getOpenedFile();
+      if (openedFile) {
+        pendingAutoPlay = true;
+        await applyVideoFile(openedFile, false);
+      }
+    } catch (_error) {
+      // 忽略错误，让用户手动选择文件
+    }
+  })();
 
   return {
     video,
