@@ -18,9 +18,12 @@ const $cropRatioMenu = document.getElementById("crop-ratio-menu");
 const $cropSizeLabel = document.getElementById("crop-size-label");
 const $btnRotate = document.getElementById("btn-rotate");
 const $btnCrop = document.getElementById("btn-crop");
+const $btnAdjust = document.getElementById("btn-adjust");
 const $btnSave = document.getElementById("btn-save");
 const $btnReset = document.getElementById("btn-reset");
 const $btnResize = document.getElementById("btn-resize");
+const $toolbar = document.getElementById("toolbar");
+const $adjustPanel = document.getElementById("adjust-panel");
 const $ctxMenu = document.getElementById("context-menu");
 const $ctxCopy = document.getElementById("ctx-copy");
 const $ctxShare = document.getElementById("ctx-share");
@@ -41,6 +44,16 @@ let cropRegion = null;
 let cropStart = null;
 let tempCrop = null;
 let currentCropRatio = 0; // 0 means free ratio
+let isAdjusting = false;
+
+// 调整状态
+let adjustState = {
+  brightness: 0,
+  contrast: 0,
+  shadows: 0,
+  highlights: 0,
+  activeFilter: 'none'
+};
 
 // 图片拖动相关
 let isDraggingImage = false;
@@ -80,6 +93,20 @@ function updateInfo() {
   $info.classList.add("show");
 }
 
+function updateToolbarVisibility() {
+  const hasImage = currentIndex >= 0 && images.length > 0;
+  $toolbar.style.display = hasImage ? "" : "none";
+  $imageSize.classList.toggle("show", hasImage);
+}
+
+function updateOverlayHint() {
+  const hasImage = currentIndex >= 0 && images.length > 0;
+  const f11Hint = document.getElementById("f11-hint");
+  if (f11Hint) {
+    f11Hint.style.display = hasImage ? "" : "none";
+  }
+}
+
 function updateImageSize() {
   if (currentIndex < 0 || images.length === 0 || !$img.naturalWidth) {
     $imageSize.classList.remove("show");
@@ -90,7 +117,7 @@ function updateImageSize() {
   originalWidth = $img.naturalWidth;
   originalHeight = $img.naturalHeight;
 
-  // 如果有输入框获得焦点，不更新值
+  // 如果有输入框获得焦点,不更新值
   if (document.activeElement === $sizeWidth || document.activeElement === $sizeHeight) {
     return;
   }
@@ -98,14 +125,14 @@ function updateImageSize() {
   $sizeWidth.value = originalWidth;
   $sizeHeight.value = originalHeight;
 
-  // max 以 initialWidth 为上限，因为每次缩放都从原图重新缩放
+  // max 以 initialWidth 为上限,因为每次缩放都从原图重新缩放
   $sizeWidth.max = initialWidth > 0 ? initialWidth : originalWidth;
   $sizeHeight.max = initialHeight > 0 ? initialHeight : originalHeight;
 
   $imageSize.classList.add("show");
 }
 
-// 设置初始宽高（仅在首次加载时设置，后续不更新）
+// 设置初始宽高（仅在首次加载时设置,后续不更新）
 function setInitialSize() {
   if (initialWidth === 0 && initialHeight === 0) {
     initialWidth = $img.naturalWidth;
@@ -137,6 +164,7 @@ async function showImage(index) {
   if (index < 0) index = images.length - 1;
   if (index >= images.length) index = 0;
 
+  const prevIndex = currentIndex;
   currentIndex = index;
   scale = 1;
   imageScale = 1;
@@ -144,22 +172,55 @@ async function showImage(index) {
   rotation = 0;
   hasChanges = false;
   cropRegion = null;
+  adjustState = {
+    brightness: 0,
+    contrast: 0,
+    shadows: 0,
+    highlights: 0,
+    activeFilter: "none"
+  };
   hideCropRect();
   exitCropMode();
+  closeAdjustPanel();
+  hideAdjustPreview();
   updateTransform();
+  $img.style.filter = "";
+  $img.style.visibility = "visible";
 
-  revokeCurrentSrc();
-  $img.src = "";
-  setInitialSize();
-
+  let newUrl;
   try {
-    const url = await readImage(images[currentIndex]);
-    $img.src = url;
+    newUrl = await readImage(images[currentIndex]);
   } catch (e) {
     console.error("[showImage] failed to read image:", e);
+    // 图片被删除，从数组中移除，然后调整 currentIndex 跳过它
+    const failedIndex = currentIndex;
+    images.splice(failedIndex, 1);
+    // 调整 currentIndex 到有效位置（跳过被删除的图片）
+    if (images.length === 0) {
+      // 没有图片了
+      currentIndex = -1;
+    } else if (failedIndex >= images.length) {
+      // 删除的是最后一张，现在指向最后一张
+      currentIndex = images.length - 1;
+    } else {
+      // 删除的是中间的图片，currentIndex 保持为 failedIndex（现在是下一张图片）
+      currentIndex = failedIndex;
+    }
+    // 清除旧图片并隐藏
+    $img.src = "";
+    $img.style.visibility = "hidden";
+    // 隐藏左上角的名字
+    $info.classList.remove("show");
+    $info.textContent = "";
     $errorOverlay.classList.remove("hidden");
     return;
   }
+
+  // 只有成功读取后才清除旧图片
+  revokeCurrentSrc();
+  $img.src = newUrl;
+  setInitialSize();
+  updateAdjustUI();
 
   // 等待图片加载完成以获取正确的尺寸
   await new Promise((resolve) => {
@@ -171,6 +232,23 @@ async function showImage(index) {
         resolve();
       };
       $img.onerror = () => {
+        // 图片加载失败（损坏或文件被删除），从数组中移除
+        const failedIndex = currentIndex;
+        // images.splice(failedIndex, 1);
+        // 调整 currentIndex 到有效位置（跳过被删除的图片）
+        if (images.length === 0) {
+          currentIndex = -1;
+        } else if (failedIndex >= images.length) {
+          currentIndex = images.length - 1;
+        } else {
+          currentIndex = failedIndex;
+        }
+        // 清除图片并隐藏
+        $img.src = "";
+        $img.style.visibility = "hidden";
+        // 隐藏左上角的名字
+        $info.classList.remove("show");
+        $info.textContent = "";
         $errorOverlay.classList.remove("hidden");
         resolve();
       };
@@ -183,6 +261,8 @@ async function showImage(index) {
   updateImageSize();
   setInitialSize();
   updateSaveButtonState();
+  updateToolbarVisibility();
+  updateOverlayHint();
 }
 
 async function loadDir(dirPath) {
@@ -288,18 +368,34 @@ async function resetView() {
   scale = 1;
   imageOffset = { x: 0, y: 0 };
   rotation = 0;
+  adjustState = {
+    brightness: 0,
+    contrast: 0,
+    shadows: 0,
+    highlights: 0,
+    activeFilter: "none"
+  };
   updateTransform();
   cropRegion = null;
   hideCropRect();
   exitCropMode();
+  closeAdjustPanel();
   resetSizeInputs();
-  if ($img.src && $img.src.startsWith("blob:")) {
+
+  // 先重新加载原图，确保显示的是原始图片
+  if (images.length > 0) {
     revokeCurrentSrc();
     const url = await readImage(images[currentIndex]);
     $img.src = url;
   }
+
+  // 然后隐藏预览，恢复状态
+  hideAdjustPreview();
+  $img.style.filter = "";
+  $img.style.visibility = "visible";
   hasChanges = false;
   updateSaveButtonState();
+  updateAdjustUI();
 }
 
 function zoom(delta) {
@@ -333,24 +429,52 @@ async function getEditedCanvas() {
   const nh = $img.naturalHeight;
   if (!nw || !nh) return null;
 
+  console.log("[getEditedCanvas] start, adjustState:", JSON.stringify(adjustState));
+
+  let canvas, ctx;
+
   if (rotation === 0) {
-    const c = document.createElement("canvas");
-    c.width = nw;
-    c.height = nh;
-    c.getContext("2d").drawImage($img, 0, 0);
-    return c;
+    canvas = document.createElement("canvas");
+    canvas.width = nw;
+    canvas.height = nh;
+    ctx = canvas.getContext("2d");
+    ctx.drawImage($img, 0, 0);
+  } else {
+    const w = rotation % 180 === 0 ? nw : nh;
+    const h = rotation % 180 === 0 ? nh : nw;
+    canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    ctx = canvas.getContext("2d");
+    ctx.translate(w / 2, h / 2);
+    ctx.rotate((rotation * Math.PI) / 180);
+    ctx.drawImage($img, -nw / 2, -nh / 2);
   }
 
-  const w = rotation % 180 === 0 ? nw : nh;
-  const h = rotation % 180 === 0 ? nh : nw;
-  const c = document.createElement("canvas");
-  c.width = w;
-  c.height = h;
-  const ctx = c.getContext("2d");
-  ctx.translate(w / 2, h / 2);
-  ctx.rotate((rotation * Math.PI) / 180);
-  ctx.drawImage($img, -nw / 2, -nh / 2);
-  return c;
+  // 应用调整效果
+  if (adjustState.brightness !== 0 || adjustState.contrast !== 0) {
+    console.log("[getEditedCanvas] applying brightness/contrast");
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    applyBrightnessContrast(imageData, adjustState.brightness, adjustState.contrast);
+    ctx.putImageData(imageData, 0, 0);
+  }
+
+  if (adjustState.shadows !== 0 || adjustState.highlights !== 0) {
+    console.log("[getEditedCanvas] applying shadows/highlights:", adjustState.shadows, adjustState.highlights);
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    applyShadowsHighlights(imageData, adjustState.shadows, adjustState.highlights);
+    ctx.putImageData(imageData, 0, 0);
+  }
+
+  if (adjustState.activeFilter !== "none") {
+    console.log("[getEditedCanvas] applying filter:", adjustState.activeFilter);
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    applyFilter(imageData, adjustState.activeFilter);
+    ctx.putImageData(imageData, 0, 0);
+  }
+
+  console.log("[getEditedCanvas] done");
+  return canvas;
 }
 
 async function saveImage() {
@@ -408,11 +532,21 @@ async function saveImage() {
     hasChanges = false;
     rotation = 0;
     scale = 1;
+    adjustState = {
+      brightness: 0,
+      contrast: 0,
+      shadows: 0,
+      highlights: 0,
+      activeFilter: "none"
+    };
     updateTransform();
     updateSaveButtonState();
+    hideAdjustPreview();
     revokeCurrentSrc();
     const url = await readImage(images[currentIndex]);
     $img.src = url;
+    $img.style.filter = "";
+    $img.style.visibility = "visible";
   } catch (e) {
     console.error("[saveImage] error:", e);
     alert("保存失败: " + e);
@@ -569,7 +703,7 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
-// 滚轮缩放 - 使用乘法因子使缩放更平滑，带节流
+// 滚轮缩放 - 使用乘法因子使缩放更平滑,带节流
 let lastWheelTime = 0;
 const wheelThrottle = 100; // 每100ms最多触发一次
 
@@ -581,7 +715,7 @@ document.addEventListener("wheel", (e) => {
   if (now - lastWheelTime < wheelThrottle) return;
   lastWheelTime = now;
 
-  // deltaY > 0 表示向下滚动（缩小），deltaY < 0 表示向上滚动（放大）
+  // deltaY > 0 表示向下滚动（缩小）,deltaY < 0 表示向上滚动（放大）
   // 每次滚动缩放 8%
   const delta = e.deltaY > 0 ? -0.08 : 0.08;
   scale = Math.min(Math.max(scale * (1 + delta), 0.1), 10);
@@ -599,6 +733,10 @@ win.onDragDropEvent((event) => {
   }
 });
 
+// 初始化界面状态（无图片时隐藏工具栏和F11提示）
+updateToolbarVisibility();
+updateOverlayHint();
+
 // 双击放大/恢复
 $img.addEventListener("dblclick", toggleZoom);
 
@@ -615,7 +753,7 @@ $viewer.addEventListener("mousedown", (e) => {
 
   // 如果在裁剪模式
   if (isCropping) {
-    // 检查是否点击在裁剪框内（如果是，则拖动整个框）
+    // 检查是否点击在裁剪框内（如果是,则拖动整个框）
     if (cropRegion) {
       const { x, y, width, height } = cropRegion;
       if (mouseX >= x && mouseX <= x + width && mouseY >= y && mouseY <= y + height) {
@@ -632,7 +770,7 @@ $viewer.addEventListener("mousedown", (e) => {
     return;
   }
 
-  // 非裁剪模式：检查是否点击在图片上，如果是则启动图片拖动
+  // 非裁剪模式：检查是否点击在图片上,如果是则启动图片拖动
   const imgRect = $img.getBoundingClientRect();
   if (mouseX >= imgRect.left - viewerRect.left && mouseX <= imgRect.right - viewerRect.left &&
       mouseY >= imgRect.top - viewerRect.top && mouseY <= imgRect.bottom - viewerRect.top) {
@@ -666,7 +804,7 @@ window.addEventListener("mousemove", (e) => {
     return;
   }
 
-  // 如果不在裁剪模式，不处理裁剪相关逻辑
+  // 如果不在裁剪模式,不处理裁剪相关逻辑
   if (!isCropping) return;
 
   // 如果正在拖动裁剪框
@@ -703,7 +841,7 @@ window.addEventListener("mousemove", (e) => {
   let w = Math.abs(cx - startX);
   let h = Math.abs(cy - startY);
 
-  // 如果有比例约束，调整尺寸以保持比例
+  // 如果有比例约束,调整尺寸以保持比例
   if (currentCropRatio > 0) {
     if (w > h * currentCropRatio) {
       w = h * currentCropRatio;
@@ -791,7 +929,7 @@ async function copyImage() {
 
   console.log("[copyImage] starting, path:", images[currentIndex]);
   try {
-    // 如果有裁剪区域或旋转，先保存临时文件再拷贝
+    // 如果有裁剪区域或旋转,先保存临时文件再拷贝
     if (cropRegion || rotation !== 0) {
       console.log("[copyImage] has crop or rotation, saving temp file");
 
@@ -815,7 +953,7 @@ async function copyImage() {
       await invoke("copy_image_to_clipboard", { path: tmpPath });
       console.log("[copyImage] copied to clipboard via rust");
     } else {
-      // 没有裁剪和旋转，直接拷贝原文件
+      // 没有裁剪和旋转,直接拷贝原文件
       await invoke("copy_image_to_clipboard", { path: images[currentIndex] });
       console.log("[copyImage] copied original file to clipboard");
     }
@@ -860,7 +998,7 @@ async function convertAndSaveImage(isShare = false, options = {}) {
   try {
     const { quality, colors, targetMime: optTargetMime, targetExt: optTargetExt } = options;
 
-    // 如果调用时明确指定了目标格式，使用指定格式；否则根据原图扩展名判断
+    // 如果调用时明确指定了目标格式,使用指定格式；否则根据原图扩展名判断
     let targetMime = optTargetMime;
     let targetExt = optTargetExt;
 
@@ -1003,6 +1141,7 @@ $pngColorSubmenu.querySelectorAll(".submenu-item").forEach((item) => {
 // 工具栏事件
 $btnRotate.addEventListener("click", rotateImage);
 $btnCrop.addEventListener("click", toggleCropMode);
+$btnAdjust.addEventListener("click", toggleAdjustPanel);
 $btnSave.addEventListener("click", saveImage);
 $btnReset.addEventListener("click", resetView);
 
@@ -1018,7 +1157,7 @@ document.querySelectorAll(".ratio-item").forEach((item) => {
       item.classList.add("active");
     }
 
-    // 如果当前已有裁剪区域，应用新比例
+    // 如果当前已有裁剪区域,应用新比例
     if (cropRegion && ratio > 0) {
       const viewerRect = $viewer.getBoundingClientRect();
       const imgRect = $img.getBoundingClientRect();
@@ -1028,7 +1167,7 @@ document.querySelectorAll(".ratio-item").forEach((item) => {
       const centerX = cropRegion.x + cropRegion.width / 2;
       const centerY = cropRegion.y + cropRegion.height / 2;
 
-      // 保持中心点，调整尺寸
+      // 保持中心点,调整尺寸
       let newW = cropRegion.width;
       let newH = cropRegion.height;
 
@@ -1049,11 +1188,11 @@ document.querySelectorAll(".ratio-item").forEach((item) => {
   });
 });
 
-// 宽高输入框失焦时，根据比例自动调整另一个值
+// 宽高输入框失焦时,根据比例自动调整另一个值
 $sizeWidth.addEventListener("blur", () => {
   if (initialWidth === 0 || initialHeight === 0) return;
   const inputWidth = parseInt($sizeWidth.value, 10);
-  // 负数或无效值或超过初始值，恢复初始值
+  // 负数或无效值或超过初始值,恢复初始值
   if (isNaN(inputWidth) || inputWidth <= 0 || inputWidth > initialWidth) {
     resetSizeInputs();
     return;
@@ -1066,7 +1205,7 @@ $sizeWidth.addEventListener("blur", () => {
 $sizeHeight.addEventListener("blur", () => {
   if (initialWidth === 0 || initialHeight === 0) return;
   const inputHeight = parseInt($sizeHeight.value, 10);
-  // 负数或无效值或超过初始值，恢复初始值
+  // 负数或无效值或超过初始值,恢复初始值
   if (isNaN(inputHeight) || inputHeight <= 0 || inputHeight > initialHeight) {
     resetSizeInputs();
     return;
@@ -1085,7 +1224,7 @@ $btnResize.addEventListener("click", async () => {
     return;
   }
 
-  // 若输入值等于初始值，不进行缩放
+  // 若输入值等于初始值,不进行缩放
   if (inputWidth === initialWidth && inputHeight === initialHeight) {
     return;
   }
@@ -1174,9 +1313,9 @@ invoke("check_macos_security_status")
     if (!status.allowed) reasons.push("系统尚未明确允许该应用");
     if (status.quarantined) reasons.push("应用仍带有隔离标记");
     if (status.translocated) reasons.push("应用正在 App Translocation 临时路径运行");
-    const tip = reasons.join("，");
+    const tip = reasons.join(",");
 
-    if (confirm(`检测到当前应用安全状态可能影响“打开方式”与文件关联：${tip}。\n是否现在打开“系统设置 > 隐私与安全性”页面？`)) {
+    if (confirm(`检测到当前应用安全状态可能影响"打开方式"与文件关联：${tip}。\n是否现在打开"系统设置 > 隐私与安全性"页面？`)) {
       invoke("open_macos_security_settings").catch((e) => {
         console.warn("open_macos_security_settings failed:", e);
       });
@@ -1185,3 +1324,371 @@ invoke("check_macos_security_status")
   .catch((e) => {
     console.warn("check_macos_security_status failed:", e);
   });
+
+// ========== 调整面板功能 ==========
+
+function toggleAdjustPanel() {
+  isAdjusting = !isAdjusting;
+  if (isAdjusting) {
+    $adjustPanel.classList.remove("hidden");
+    exitCropMode();
+  } else {
+    $adjustPanel.classList.add("hidden");
+  }
+}
+
+function closeAdjustPanel() {
+  isAdjusting = false;
+  $adjustPanel.classList.add("hidden");
+  hideAdjustPreview();
+}
+
+let previewThrottleTimer = null;
+
+function updateImagePreview() {
+  const { brightness, contrast } = adjustState;
+  let cssFilter = "";
+
+  if (brightness !== 0 || contrast !== 0) {
+    const b = 100 + brightness;
+    const c = 100 + contrast;
+    cssFilter = `brightness(${b}%) contrast(${c}%)`;
+  }
+
+  $img.style.filter = cssFilter;
+
+  // 阴影/高光/滤镜需要 Canvas 渲染，用节流避免卡顿
+  if (previewThrottleTimer) clearTimeout(previewThrottleTimer);
+  previewThrottleTimer = setTimeout(() => {
+    updateAdjustPreviewCanvas();
+  }, 150);
+}
+
+let previewImg = null;
+
+async function updateAdjustPreviewCanvas() {
+  if (images.length === 0) return;
+  if ($img.naturalWidth === 0) return;
+
+  // 保存原始图片 URL
+  const originalSrc = $img.src.startsWith("blob:") ? null : $img.src;
+
+  // 创建缩略图预览（最大 600px）
+  const pw = $img.naturalWidth;
+  const ph = $img.naturalHeight;
+
+  const previewCanvas = document.createElement("canvas");
+  previewCanvas.width = pw;
+  previewCanvas.height = ph;
+  const pctx = previewCanvas.getContext("2d");
+  pctx.drawImage($img, 0, 0, pw, ph);
+
+  // 应用阴影/高光
+  if (adjustState.shadows !== 0 || adjustState.highlights !== 0) {
+    const imageData = pctx.getImageData(0, 0, pw, ph);
+    applyShadowsHighlights(imageData, adjustState.shadows, adjustState.highlights);
+    pctx.putImageData(imageData, 0, 0);
+  }
+
+  // 应用滤镜
+  if (adjustState.activeFilter !== "none") {
+    const imageData = pctx.getImageData(0, 0, pw, ph);
+    applyFilter(imageData, adjustState.activeFilter);
+    pctx.putImageData(imageData, 0, 0);
+  }
+
+  // 创建预览图片元素
+  const blob = await new Promise((res) => previewCanvas.toBlob(res, "image/png"));
+  const url = URL.createObjectURL(blob);
+
+  if (!previewImg) {
+    previewImg = new Image();
+  }
+
+  // 预览图片样式：保持高糊度（因为是小图放大）
+  previewImg.style.position = "absolute";
+  previewImg.style.width = $img.style.width || $img.width + "px";
+  previewImg.style.height = $img.style.height || $img.height + "px";
+  previewImg.style.objectFit = "contain";
+  previewImg.style.filter = $img.style.filter;
+  previewImg.style.pointerEvents = "none";
+
+  previewImg.onload = () => {
+    // 隐藏原图，显示预览
+    $img.style.visibility = "hidden";
+    if (previewImg.parentElement !== $viewer) {
+      $viewer.appendChild(previewImg);
+    }
+    previewImg.style.visibility = "visible";
+  };
+
+  previewImg.src = url;
+}
+
+// 隐藏预览，恢复原图
+function hideAdjustPreview() {
+  if (previewImg) {
+    // 取消预览图的 onload，避免它之后覆盖 visibility 设置
+    previewImg.onload = null;
+    previewImg.style.visibility = "hidden";
+    $img.style.visibility = "visible";
+  }
+}
+
+function updateAdjustUI() {
+  document.getElementById("val-brightness").textContent = adjustState.brightness;
+  document.getElementById("val-contrast").textContent = adjustState.contrast;
+  document.getElementById("val-shadows").textContent = adjustState.shadows;
+  document.getElementById("val-highlights").textContent = adjustState.highlights;
+
+  document.getElementById("slider-brightness").value = adjustState.brightness;
+  document.getElementById("slider-contrast").value = adjustState.contrast;
+  document.getElementById("slider-shadows").value = adjustState.shadows;
+  document.getElementById("slider-highlights").value = adjustState.highlights;
+
+  document.querySelectorAll(".filter-item").forEach((el) => {
+    el.classList.toggle("active", el.dataset.filter === adjustState.activeFilter);
+  });
+
+  updateImagePreview();
+}
+
+function hasAdjustChanges() {
+  return adjustState.brightness !== 0 ||
+         adjustState.contrast !== 0 ||
+         adjustState.shadows !== 0 ||
+         adjustState.highlights !== 0 ||
+         adjustState.activeFilter !== 'none';
+}
+
+// 亮度/对比度调整
+function applyBrightnessContrast(imageData, brightness, contrast) {
+  const data = imageData.data;
+  const brightnessFactor = brightness / 100;
+  const contrastFactor = (contrast + 100) / 100;
+
+  for (let i = 0; i < data.length; i += 4) {
+    for (let c = 0; c < 3; c++) {
+      let val = data[i + c];
+      // 亮度
+      val += brightnessFactor * 255;
+      // 对比度
+      val = ((val / 255 - 0.5) * contrastFactor + 0.5) * 255;
+      data[i + c] = Math.max(0, Math.min(255, val));
+    }
+  }
+}
+
+// 阴影/高光调整（色调分离）
+function applyShadowsHighlights(imageData, shadows, highlights) {
+  const data = imageData.data;
+  const shadowsFactor = shadows / 50;
+  const highlightsFactor = highlights / 50;
+
+  for (let i = 0; i < data.length; i += 4) {
+    const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+    const normalizedLum = lum / 255;
+
+    let shadowAdj = 0,
+      highlightAdj = 0;
+
+    if (normalizedLum < 0.5) {
+      shadowAdj = shadowsFactor * (1 - normalizedLum * 2);
+    } else {
+      highlightAdj = highlightsFactor * ((normalizedLum - 0.5) * 2);
+    }
+
+    const factor = 1 + shadowAdj + highlightAdj;
+
+    for (let c = 0; c < 3; c++) {
+      data[i + c] = Math.max(0, Math.min(255, data[i + c] * factor));
+    }
+  }
+}
+
+// 滤镜应用
+function applyFilter(imageData, filterName) {
+  const data = imageData.data;
+
+  switch (filterName) {
+    case "grayscale":
+      for (let i = 0; i < data.length; i += 4) {
+        const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+        data[i] = data[i + 1] = data[i + 2] = gray;
+      }
+      break;
+    case "warm":
+      for (let i = 0; i < data.length; i += 4) {
+        data[i] = Math.min(255, data[i] * 1.1);
+        data[i + 2] = Math.max(0, data[i + 2] * 0.9);
+      }
+      break;
+    case "cool":
+      for (let i = 0; i < data.length; i += 4) {
+        data[i] = Math.max(0, data[i] * 0.9);
+        data[i + 2] = Math.min(255, data[i + 2] * 1.1);
+      }
+      break;
+    case "vintage":
+      for (let i = 0; i < data.length; i += 4) {
+        data[i] = Math.min(255, data[i] * 1.0 + 20);
+        data[i + 1] = Math.min(255, data[i + 1] * 0.9 + 10);
+        data[i + 2] = Math.min(255, data[i + 2] * 0.8 + 20);
+      }
+      break;
+    case "vivid":
+      for (let i = 0; i < data.length; i += 4) {
+        const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+        for (let c = 0; c < 3; c++) {
+          data[i + c] = Math.max(
+            0,
+            Math.min(255, data[i + c] * 1.2 + (data[i + c] - lum) * 0.3)
+          );
+        }
+      }
+      break;
+  }
+}
+
+// 自动色阶
+function autoTone(imageData) {
+  const data = imageData.data;
+  const histogram = new Array(256).fill(0);
+  const pixelCount = data.length / 4;
+
+  // 构建亮度直方图
+  for (let i = 0; i < data.length; i += 4) {
+    const lum = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
+    histogram[lum]++;
+  }
+
+  // 找出左右裁剪点 (0.5%)
+  const clipPercent = 0.5;
+  const clipCount = pixelCount * (clipPercent / 100);
+  let cumsum = 0;
+  let minLum = 0;
+  let maxLum = 255;
+
+  for (let i = 0; i < 256; i++) {
+    cumsum += histogram[i];
+    if (cumsum <= clipCount) minLum = i;
+  }
+
+  cumsum = 0;
+  for (let i = 255; i >= 0; i--) {
+    cumsum += histogram[i];
+    if (cumsum <= clipCount) maxLum = i;
+  }
+
+  // 线性拉伸
+  if (maxLum > minLum) {
+    const factor = 255 / (maxLum - minLum);
+    for (let i = 0; i < data.length; i += 4) {
+      for (let c = 0; c < 3; c++) {
+        data[i + c] = Math.max(0, Math.min(255, (data[i + c] - minLum) * factor));
+      }
+    }
+  }
+}
+
+// 滑块事件
+document.getElementById("slider-brightness").addEventListener("input", (e) => {
+  adjustState.brightness = parseInt(e.target.value, 10);
+  updateAdjustUI();
+  markAdjustChanges();
+});
+
+document.getElementById("slider-contrast").addEventListener("input", (e) => {
+  adjustState.contrast = parseInt(e.target.value, 10);
+  updateAdjustUI();
+  markAdjustChanges();
+});
+
+document.getElementById("slider-shadows").addEventListener("input", (e) => {
+  adjustState.shadows = parseInt(e.target.value, 10);
+  updateAdjustUI();
+  markAdjustChanges();
+});
+
+document.getElementById("slider-highlights").addEventListener("input", (e) => {
+  adjustState.highlights = parseInt(e.target.value, 10);
+  updateAdjustUI();
+  markAdjustChanges();
+});
+
+// 滤镜选择
+document.querySelectorAll(".filter-item").forEach((item) => {
+  item.addEventListener("click", () => {
+    adjustState.activeFilter = item.dataset.filter;
+    updateAdjustUI();
+    markAdjustChanges();
+  });
+});
+
+function markAdjustChanges() {
+  if (hasAdjustChanges()) {
+    hasChanges = true;
+    updateSaveButtonState();
+  }
+}
+
+// 自动色阶按钮
+document.getElementById("btn-auto-tone").addEventListener("click", async () => {
+  if (images.length === 0) return;
+
+  $loadingOverlay.classList.remove("hidden");
+  await waitForNextPaint();
+
+  try {
+    const canvas = await getEditedCanvas();
+    if (!canvas) return;
+
+    const imageData = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
+    autoTone(imageData);
+    canvas.getContext("2d").putImageData(imageData, 0, 0);
+
+    // 显示预览
+    const blob = await new Promise((res) => canvas.toBlob(res, "image/png"));
+    const url = URL.createObjectURL(blob);
+    revokeCurrentSrc();
+    $img.src = url;
+    $img.style.filter = "";
+
+    hasChanges = true;
+    updateSaveButtonState();
+    closeAdjustPanel();
+  } catch (e) {
+    console.error("Auto tone failed:", e);
+  } finally {
+    $loadingOverlay.classList.add("hidden");
+  }
+});
+
+// 复位按钮
+document.getElementById("btn-reset-adjust").addEventListener("click", async () => {
+  adjustState = {
+    brightness: 0,
+    contrast: 0,
+    shadows: 0,
+    highlights: 0,
+    activeFilter: "none"
+  };
+  updateAdjustUI();
+
+  if (hasAdjustChanges() === false && $img.src && $img.src.startsWith("blob:")) {
+    revokeCurrentSrc();
+    const url = await readImage(images[currentIndex]);
+    $img.src = url;
+  }
+
+  hasChanges = false;
+  updateSaveButtonState();
+});
+
+// 点击调节按钮时,如果有调整且离开面板,恢复预览
+$btnAdjust.addEventListener("click", () => {
+  if (isAdjusting && hasAdjustChanges()) {
+    // 重新加载原图清除预览效果
+    $img.style.filter = "";
+  }
+});
