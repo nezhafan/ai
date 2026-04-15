@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Image View</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <div id="viewer">
+        <img id="image" alt="" />
+        <div id="crop-rect" class="hidden"></div>
+      </div>
+      <div id="loading-overlay" class="hidden">
+        <div class="loading-spinner"></div>
+        <p>转换中...</p>
+      </div>
+      <div id="error-overlay" class="hidden">
+        <div class="error-icon">&#9888;</div>
+        <p>图片加载失败</p>
+        <p class="hint">文件可能已被删除或移动</p>
+      </div>
+      <div id="overlay" class="show">
+        <p>拖拽图片到此处，或按 <kbd>O</kbd> 打开文件</p>
+        <p class="hint">← → 翻页 · 滚轮缩放 · R 旋转 · 0 复位 · F11 全屏</p>
+      </div>
+      <div id="info"></div>
+      <div id="image-size">
+        <input type="number" id="size-width" /> × <input type="number" id="size-height" />
+        <button id="btn-resize">缩放</button>
+      </div>
+      <div id="crop-ratio-menu" class="hidden">
+        <div class="ratio-item" data-ratio="0">自由</div>
+        <div class="ratio-item" data-ratio="1">1:1</div>
+        <div class="ratio-item" data-ratio="1.5">3:2</div>
+        <div class="ratio-item" data-ratio="1.333">4:3</div>
+        <div class="ratio-item" data-ratio="1.778">16:9</div>
+        <div class="ratio-item" data-ratio="0.667">2:3</div>
+        <div class="ratio-item" data-ratio="0.75">3:4</div>
+        <div class="ratio-item" data-ratio="0.5625">9:16</div>
+      </div>
+      <div id="toolbar">
+        <button id="btn-rotate" title="旋转 (R)">旋转</button>
+        <button id="btn-crop" title="裁剪 (C)">裁剪</button>
+        <button id="btn-save" title="保存 (Ctrl+S)">保存</button>
+        <button id="btn-reset" title="复位 (0)">复位</button>
+      </div>
+      <div id="crop-hint" class="hidden">拖拽选取裁剪区域，按 Enter 确认，Esc 取消</div>
+      <div id="crop-size-label" class="hidden"></div>
+      <div id="context-menu" class="hidden">
+        <div id="ctx-copy">拷贝图片</div>
+        <div id="ctx-share">分享</div>
+        <div class="ctx-divider"></div>
+        <div id="ctx-to-jpg" class="has-submenu">
+          <span>转为 JPG</span>
+          <div id="jpg-quality-submenu" class="submenu hidden">
+            <div class="submenu-item" data-quality="1.0">100</div>
+            <div class="submenu-item" data-quality="0.85">85</div>
+            <div class="submenu-item" data-quality="0.5">50</div>
+            <div class="submenu-item" data-quality="0.3">30</div>
+          </div>
+        </div>
+        <div id="ctx-to-png" class="has-submenu">
+          <span>转为 PNG</span>
+          <div id="png-color-submenu" class="submenu hidden">
+            <div class="submenu-item" data-colors="0">原始颜色</div>
+            <div class="submenu-item" data-colors="256">256 色</div>
+            <div class="submenu-item" data-colors="128">128 色</div>
+            <div class="submenu-item" data-colors="64">64 色</div>
+            <div class="submenu-item" data-colors="32">32 色</div>
+            <div class="submenu-item" data-colors="16">16 色</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
