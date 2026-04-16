@@ -126,6 +126,39 @@ fn read_image(path: String) -> Result<Vec<u8>, String> {
 }
 
 #[tauri::command]
+fn read_thumbnail(path: String, max_size: u32) -> Result<Vec<u8>, String> {
+    let img = image::open(&path).map_err(|e| e.to_string())?;
+
+    let (width, height) = (img.width(), img.height());
+    let (new_width, new_height) = if width > height {
+        if width <= max_size {
+            (width, height)
+        } else {
+            let ratio = max_size as f32 / width as f32;
+            (max_size, (height as f32 * ratio) as u32)
+        }
+    } else {
+        if height <= max_size {
+            (width, height)
+        } else {
+            let ratio = max_size as f32 / height as f32;
+            ((width as f32 * ratio) as u32, max_size)
+        }
+    };
+
+    let thumbnail = img.resize(new_width, new_height, image::imageops::FilterType::Triangle);
+    let rgb_image = thumbnail.to_rgb8();
+
+    let mut buffer = Vec::new();
+    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buffer, 85);
+    encoder
+        .encode(&rgb_image, new_width, new_height, image::ExtendedColorType::Rgb8)
+        .map_err(|e| e.to_string())?;
+
+    Ok(buffer)
+}
+
+#[tauri::command]
 fn copy_image_to_clipboard(path: String) -> Result<(), String> {
     log::info!("copy_image_to_clipboard called with path: {}", path);
 
@@ -295,6 +328,7 @@ pub fn run() {
             save_image,
             encode_indexed_png,
             read_image,
+            read_thumbnail,
             copy_image_to_clipboard,
             take_pending_open_paths,
             check_macos_security_status,

@@ -50,8 +50,8 @@ let isAdjusting = false;
 let adjustState = {
   brightness: 0,
   contrast: 0,
-  dark: 0,
-  bright: 0,
+  shadows: 0,
+  highlights: 0,
   activeFilter: 'none'
 };
 
@@ -175,54 +175,58 @@ async function showImage(index) {
   adjustState = {
     brightness: 0,
     contrast: 0,
-    dark: 0,
-    bright: 0,
+    shadows: 0,
+    highlights: 0,
     activeFilter: "none"
   };
   hideCropRect();
   exitCropMode();
   closeAdjustPanel();
-  hideAdjustPreview();
   updateTransform();
   $img.style.filter = "";
   $img.style.visibility = "visible";
 
+  const currentPath = images[currentIndex];
+  let thumbUrl = null;
+
+  // 1. 先加载缩略图快速显示
+  try {
+    const thumbData = await invoke("read_thumbnail", { path: currentPath, max_size: 800 });
+    const thumbBlob = new Blob([new Uint8Array(thumbData)], { type: "image/jpeg" });
+    thumbUrl = URL.createObjectURL(thumbBlob);
+    revokeCurrentSrc();
+    $img.src = thumbUrl;
+    setInitialSize();
+    updateAdjustUI();
+  } catch (e) {
+    console.error("[showImage] failed to load thumbnail:", e);
+  }
+
+  // 2. 后台加载原图
   let newUrl;
   try {
-    newUrl = await readImage(images[currentIndex]);
+    newUrl = await readImage(currentPath);
   } catch (e) {
     console.error("[showImage] failed to read image:", e);
-    // 图片被删除，从数组中移除，然后调整 currentIndex 跳过它
     const failedIndex = currentIndex;
     images.splice(failedIndex, 1);
-    // 调整 currentIndex 到有效位置（跳过被删除的图片）
     if (images.length === 0) {
-      // 没有图片了
       currentIndex = -1;
     } else if (failedIndex >= images.length) {
-      // 删除的是最后一张，现在指向最后一张
       currentIndex = images.length - 1;
     } else {
-      // 删除的是中间的图片，currentIndex 保持为 failedIndex（现在是下一张图片）
       currentIndex = failedIndex;
     }
-    // 清除旧图片并隐藏
     $img.src = "";
     $img.style.visibility = "hidden";
-    // 隐藏左上角的名字
     $info.classList.remove("show");
     $info.textContent = "";
     $errorOverlay.classList.remove("hidden");
     return;
   }
 
-  // 只有成功读取后才清除旧图片
-  revokeCurrentSrc();
-  $img.src = newUrl;
-  setInitialSize();
-  updateAdjustUI();
-
-  // 等待图片加载完成以获取正确的尺寸
+  // 3. 原图加载完成后替换
+  const finalUrl = newUrl;
   await new Promise((resolve) => {
     if ($img.complete && $img.naturalWidth > 0) {
       resolve();
@@ -232,10 +236,7 @@ async function showImage(index) {
         resolve();
       };
       $img.onerror = () => {
-        // 图片加载失败（损坏或文件被删除），从数组中移除
         const failedIndex = currentIndex;
-        // images.splice(failedIndex, 1);
-        // 调整 currentIndex 到有效位置（跳过被删除的图片）
         if (images.length === 0) {
           currentIndex = -1;
         } else if (failedIndex >= images.length) {
@@ -243,10 +244,8 @@ async function showImage(index) {
         } else {
           currentIndex = failedIndex;
         }
-        // 清除图片并隐藏
         $img.src = "";
         $img.style.visibility = "hidden";
-        // 隐藏左上角的名字
         $info.classList.remove("show");
         $info.textContent = "";
         $errorOverlay.classList.remove("hidden");
@@ -254,6 +253,14 @@ async function showImage(index) {
       };
     }
   });
+
+  // 清理缩略图 URL
+  if (thumbUrl && thumbUrl !== finalUrl) {
+    URL.revokeObjectURL(thumbUrl);
+  }
+
+  revokeCurrentSrc();
+  $img.src = finalUrl;
 
   $overlay.classList.remove("show");
   $errorOverlay.classList.add("hidden");
@@ -371,8 +378,8 @@ async function resetView() {
   adjustState = {
     brightness: 0,
     contrast: 0,
-    dark: 0,
-    bright: 0,
+    shadows: 0,
+    highlights: 0,
     activeFilter: "none"
   };
   updateTransform();
@@ -389,8 +396,7 @@ async function resetView() {
     $img.src = url;
   }
 
-  // 然后隐藏预览，恢复状态
-  hideAdjustPreview();
+  // 恢复状态
   $img.style.filter = "";
   $img.style.visibility = "visible";
   hasChanges = false;
@@ -451,21 +457,7 @@ async function getEditedCanvas() {
     ctx.drawImage($img, -nw / 2, -nh / 2);
   }
 
-  // 应用调整效果
-  if (adjustState.brightness !== 0 || adjustState.contrast !== 0) {
-    console.log("[getEditedCanvas] applying brightness/contrast");
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    applyBrightnessContrast(imageData, adjustState.brightness, adjustState.contrast);
-    ctx.putImageData(imageData, 0, 0);
-  }
-
-  if (adjustState.dark !== 0 || adjustState.bright !== 0) {
-    console.log("[getEditedCanvas] applying dark/bright:", adjustState.dark, adjustState.bright);
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    applyDarkBright(imageData, adjustState.dark, adjustState.bright);
-    ctx.putImageData(imageData, 0, 0);
-  }
-
+  // 应用滤镜效果
   if (adjustState.activeFilter !== "none") {
     console.log("[getEditedCanvas] applying filter:", adjustState.activeFilter);
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -535,13 +527,12 @@ async function saveImage() {
     adjustState = {
       brightness: 0,
       contrast: 0,
-      dark: 0,
-      bright: 0,
+      shadows: 0,
+      highlights: 0,
       activeFilter: "none"
     };
     updateTransform();
     updateSaveButtonState();
-    hideAdjustPreview();
     revokeCurrentSrc();
     const url = await readImage(images[currentIndex]);
     $img.src = url;
@@ -1357,7 +1348,7 @@ function updateImagePreview() {
 
   $img.style.filter = cssFilter;
 
-  // 阴影/高光/滤镜需要 Canvas 渲染，用节流避免卡顿
+  // 滤镜需要 Canvas 渲染，用节流避免卡顿
   if (previewThrottleTimer) clearTimeout(previewThrottleTimer);
   previewThrottleTimer = setTimeout(() => {
     updateAdjustPreviewCanvas();
@@ -1370,10 +1361,6 @@ async function updateAdjustPreviewCanvas() {
   if (images.length === 0) return;
   if ($img.naturalWidth === 0) return;
 
-  // 保存原始图片 URL
-  const originalSrc = $img.src.startsWith("blob:") ? null : $img.src;
-
-  // 创建缩略图预览（最大 600px）
   const pw = $img.naturalWidth;
   const ph = $img.naturalHeight;
 
@@ -1382,13 +1369,6 @@ async function updateAdjustPreviewCanvas() {
   previewCanvas.height = ph;
   const pctx = previewCanvas.getContext("2d");
   pctx.drawImage($img, 0, 0, pw, ph);
-
-  // 应用暗部/亮部
-  if (adjustState.dark !== 0 || adjustState.bright !== 0) {
-    const imageData = pctx.getImageData(0, 0, pw, ph);
-    applyDarkBright(imageData, adjustState.dark, adjustState.bright);
-    pctx.putImageData(imageData, 0, 0);
-  }
 
   // 应用滤镜
   if (adjustState.activeFilter !== "none") {
@@ -1405,7 +1385,7 @@ async function updateAdjustPreviewCanvas() {
     previewImg = new Image();
   }
 
-  // 预览图片样式：保持高糊度（因为是小图放大）
+  // 预览图片样式
   previewImg.style.position = "absolute";
   previewImg.style.width = $img.style.width || $img.width + "px";
   previewImg.style.height = $img.style.height || $img.height + "px";
@@ -1428,7 +1408,6 @@ async function updateAdjustPreviewCanvas() {
 // 隐藏预览，恢复原图
 function hideAdjustPreview() {
   if (previewImg) {
-    // 取消预览图的 onload，避免它之后覆盖 visibility 设置
     previewImg.onload = null;
     previewImg.style.visibility = "hidden";
     $img.style.visibility = "visible";
@@ -1436,16 +1415,6 @@ function hideAdjustPreview() {
 }
 
 function updateAdjustUI() {
-  document.getElementById("val-brightness").textContent = adjustState.brightness;
-  document.getElementById("val-contrast").textContent = adjustState.contrast;
-  document.getElementById("val-dark").textContent = adjustState.dark;
-  document.getElementById("val-bright").textContent = adjustState.bright;
-
-  document.getElementById("slider-brightness").value = adjustState.brightness;
-  document.getElementById("slider-contrast").value = adjustState.contrast;
-  document.getElementById("slider-dark").value = adjustState.dark;
-  document.getElementById("slider-bright").value = adjustState.bright;
-
   document.querySelectorAll(".filter-item").forEach((el) => {
     el.classList.toggle("active", el.dataset.filter === adjustState.activeFilter);
   });
@@ -1453,76 +1422,7 @@ function updateAdjustUI() {
   updateImagePreview();
 }
 
-function hasAdjustChanges() {
-  return adjustState.brightness !== 0 ||
-         adjustState.contrast !== 0 ||
-         adjustState.dark !== 0 ||
-         adjustState.bright !== 0 ||
-         adjustState.activeFilter !== 'none';
-}
 
-// 亮度/对比度调整
-function applyBrightnessContrast(imageData, brightness, contrast) {
-  const data = imageData.data;
-  const brightnessFactor = brightness / 100;
-  const contrastFactor = (contrast + 100) / 100;
-
-  for (let i = 0; i < data.length; i += 4) {
-    for (let c = 0; c < 3; c++) {
-      let val = data[i + c];
-      // 亮度
-      val += brightnessFactor * 255;
-      // 对比度
-      val = ((val / 255 - 0.5) * contrastFactor + 0.5) * 255;
-      data[i + c] = Math.max(0, Math.min(255, val));
-    }
-  }
-}
-
-// 暗部/亮部调整（色调分离）
-// 暗部：0~80 完全应用，80~170 平滑过渡，>170 不应用
-// 亮部：170~255 完全应用，80~170 平滑过渡，<80 不应用
-function applyDarkBright(imageData, dark, bright) {
-  const data = imageData.data;
-  const darkFactor = dark / 50;
-  const brightFactor = bright / 50;
-
-  // 亮度阈值
-  const darkThreshold = 80 / 255;   // 0.314
-  const brightThreshold = 170 / 255; // 0.667
-  const softWidth = 25 / 255;        // 软过渡宽度
-
-  // Sigmoid 软过渡函数
-  const sigmoid = (x, center, width) => {
-    const k = 8 / width; // 陡峭度
-    return 1 / (1 + Math.exp(-k * (x - center)));
-  };
-
-  for (let i = 0; i < data.length; i += 4) {
-    const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-    const nl = lum / 255;
-
-    let darkAdj = 0, brightAdj = 0;
-
-    // 暗部调整：<80 完全应用，80~170 平滑过渡，>170 不应用
-    if (nl < darkThreshold + softWidth) {
-      const t = sigmoid(nl, darkThreshold, softWidth);
-      darkAdj = darkFactor * (1 - t);
-    }
-
-    // 亮部调整：>170 完全应用，80~170 平滑过渡，<80 不应用
-    if (nl > brightThreshold - softWidth) {
-      const t = sigmoid(nl, brightThreshold, softWidth);
-      brightAdj = brightFactor * t;
-    }
-
-    const factor = 1 + darkAdj + brightAdj;
-
-    for (let c = 0; c < 3; c++) {
-      data[i + c] = Math.max(0, Math.min(255, data[i + c] * factor));
-    }
-  }
-}
 
 // 滤镜应用
 function applyFilter(imageData, filterName) {
@@ -1568,145 +1468,14 @@ function applyFilter(imageData, filterName) {
   }
 }
 
-// 自动色阶
-function autoTone(imageData) {
-  const data = imageData.data;
-  const histogram = new Array(256).fill(0);
-  const pixelCount = data.length / 4;
-
-  // 构建亮度直方图
-  for (let i = 0; i < data.length; i += 4) {
-    const lum = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
-    histogram[lum]++;
-  }
-
-  // 找出左右裁剪点 (0.5%)
-  const clipPercent = 0.5;
-  const clipCount = pixelCount * (clipPercent / 100);
-  let cumsum = 0;
-  let minLum = 0;
-  let maxLum = 255;
-
-  for (let i = 0; i < 256; i++) {
-    cumsum += histogram[i];
-    if (cumsum <= clipCount) minLum = i;
-  }
-
-  cumsum = 0;
-  for (let i = 255; i >= 0; i--) {
-    cumsum += histogram[i];
-    if (cumsum <= clipCount) maxLum = i;
-  }
-
-  // 线性拉伸
-  if (maxLum > minLum) {
-    const factor = 255 / (maxLum - minLum);
-    for (let i = 0; i < data.length; i += 4) {
-      for (let c = 0; c < 3; c++) {
-        data[i + c] = Math.max(0, Math.min(255, (data[i + c] - minLum) * factor));
-      }
-    }
-  }
-}
-
-// 滑块事件
-document.getElementById("slider-brightness").addEventListener("input", (e) => {
-  adjustState.brightness = parseInt(e.target.value, 10);
-  updateAdjustUI();
-  markAdjustChanges();
-});
-
-document.getElementById("slider-contrast").addEventListener("input", (e) => {
-  adjustState.contrast = parseInt(e.target.value, 10);
-  updateAdjustUI();
-  markAdjustChanges();
-});
-
-document.getElementById("slider-dark").addEventListener("input", (e) => {
-  adjustState.dark = parseInt(e.target.value, 10);
-  updateAdjustUI();
-  markAdjustChanges();
-});
-
-document.getElementById("slider-bright").addEventListener("input", (e) => {
-  adjustState.bright = parseInt(e.target.value, 10);
-  updateAdjustUI();
-  markAdjustChanges();
-});
-
 // 滤镜选择
 document.querySelectorAll(".filter-item").forEach((item) => {
   item.addEventListener("click", () => {
     adjustState.activeFilter = item.dataset.filter;
     updateAdjustUI();
-    markAdjustChanges();
+    if (adjustState.activeFilter !== 'none') {
+      hasChanges = true;
+      updateSaveButtonState();
+    }
   });
-});
-
-function markAdjustChanges() {
-  if (hasAdjustChanges()) {
-    hasChanges = true;
-    updateSaveButtonState();
-  }
-}
-
-// 自动色阶按钮
-document.getElementById("btn-auto-tone").addEventListener("click", async () => {
-  if (images.length === 0) return;
-
-  $loadingOverlay.classList.remove("hidden");
-  await waitForNextPaint();
-
-  try {
-    const canvas = await getEditedCanvas();
-    if (!canvas) return;
-
-    const imageData = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
-    autoTone(imageData);
-    canvas.getContext("2d").putImageData(imageData, 0, 0);
-
-    // 显示预览
-    const blob = await new Promise((res) => canvas.toBlob(res, "image/png"));
-    const url = URL.createObjectURL(blob);
-    revokeCurrentSrc();
-    $img.src = url;
-    $img.style.filter = "";
-
-    hasChanges = true;
-    updateSaveButtonState();
-    closeAdjustPanel();
-  } catch (e) {
-    console.error("Auto tone failed:", e);
-  } finally {
-    $loadingOverlay.classList.add("hidden");
-  }
-});
-
-// 复位按钮
-document.getElementById("btn-reset-adjust").addEventListener("click", async () => {
-  adjustState = {
-    brightness: 0,
-    contrast: 0,
-    dark: 0,
-    bright: 0,
-    activeFilter: "none"
-  };
-  updateAdjustUI();
-
-  if (hasAdjustChanges() === false && $img.src && $img.src.startsWith("blob:")) {
-    revokeCurrentSrc();
-    const url = await readImage(images[currentIndex]);
-    $img.src = url;
-  }
-
-  hasChanges = false;
-  updateSaveButtonState();
-});
-
-// 点击调节按钮时,如果有调整且离开面板,恢复预览
-$btnAdjust.addEventListener("click", () => {
-  if (isAdjusting && hasAdjustChanges()) {
-    // 重新加载原图清除预览效果
-    $img.style.filter = "";
-  }
 });
