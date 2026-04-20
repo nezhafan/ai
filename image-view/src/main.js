@@ -1,9 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow, currentMonitor } from "@tauri-apps/api/window";
+import { LogicalSize } from "@tauri-apps/api/dpi";
 import { shouldHandleGlobalHotkey } from "./hotkeys.js";
 import { quantizeImageData } from "./image-quantize.js";
+import { pickIncomingPath, collectIncomingImagePaths, createRequestGate } from "./open-paths.js";
 
 const $img = document.getElementById("image");
 const $overlay = document.getElementById("overlay");
@@ -39,7 +41,7 @@ let currentIndex = -1;
 let scale = 1;
 let rotation = 0;
 let hasChanges = false;
-let isCropping = false;
+let isCropping = true;
 let cropRegion = null;
 let cropStart = null;
 let tempCrop = null;
@@ -64,7 +66,18 @@ let originalWidth = 0; // 原图宽度
 let originalHeight = 0; // 原图高度
 let initialWidth = 0; // 初始原图宽度（不受缩放影响）
 let initialHeight = 0; // 初始原图高度（不受缩放影响）
+let isResizingCrop = false;
+let resizeHandle = null;
+let currentCropCursor = "crosshair";
+let cropDragStartRect = null;
 const IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "bmp", "webp", "avif", "heic", "heif", "tif", "tiff"]);
+const showImageGate = createRequestGate();
+let openIncomingChain = Promise.resolve();
+const WINDOW_MIN_WIDTH = 400;
+const WINDOW_MIN_HEIGHT = 300;
+const WINDOW_CONTENT_PADDING_X = 40;
+const WINDOW_CONTENT_PADDING_Y = 72;
+const WINDOW_CHROME_HEIGHT = 34;
 
 function waitForNextPaint() {
   return new Promise((resolve) => {
@@ -153,18 +166,116 @@ function revokeCurrentSrc() {
   }
 }
 
+function revokeBlobUrl(url) {
+  if (typeof url === "string" && url.startsWith("blob:")) {
+    URL.revokeObjectURL(url);
+  }
+}
+
+function swapImageSource(url) {
+  const oldSrc = $img.src;
+  $img.src = url;
+  if (oldSrc && oldSrc !== url) {
+    revokeBlobUrl(oldSrc);
+  }
+}
+
+async function waitForImageReady(url) {
+  const probe = new Image();
+  probe.decoding = "async";
+  probe.src = url;
+
+  if (typeof probe.decode === "function") {
+    try {
+      await probe.decode();
+      return;
+    } catch {
+      // Safari 对部分格式可能 decode 失败，回退到 onload 检测
+    }
+  }
+
+  await new Promise((resolve, reject) => {
+    if (probe.complete) {
+      if (probe.naturalWidth > 0) {
+        resolve();
+      } else {
+        reject(new Error("image decode failed"));
+      }
+      return;
+    }
+    probe.onload = () => resolve();
+    probe.onerror = () => reject(new Error("image decode failed"));
+  });
+}
+
 async function readImage(path) {
   const bytes = await invoke("read_image", { path });
   const blob = new Blob([new Uint8Array(bytes)]);
   return URL.createObjectURL(blob);
 }
 
-async function showImage(index) {
+async function fitWindowToImage() {
+  if (!$img.naturalWidth || !$img.naturalHeight) return;
+
+  try {
+    const monitor = await currentMonitor();
+    const scaleFactor = monitor?.scaleFactor || window.devicePixelRatio || 1;
+    const workAreaSize = monitor?.workArea?.size || monitor?.size;
+    if (!workAreaSize) return;
+
+    const maxLogicalWidth = Math.max(
+      WINDOW_MIN_WIDTH,
+      Math.floor((workAreaSize.width / scaleFactor) * 0.98)
+    );
+    const maxLogicalHeight = Math.max(
+      WINDOW_MIN_HEIGHT,
+      Math.floor((workAreaSize.height / scaleFactor) * 0.98)
+    );
+
+    const toolbarHeight = $toolbar?.offsetHeight || 0;
+    const desiredWidth = Math.round($img.naturalWidth + WINDOW_CONTENT_PADDING_X);
+    const desiredHeight = Math.round(
+      $img.naturalHeight +
+      WINDOW_CONTENT_PADDING_Y +
+      toolbarHeight +
+      WINDOW_CHROME_HEIGHT
+    );
+
+    const finalWidth = Math.min(maxLogicalWidth, Math.max(WINDOW_MIN_WIDTH, desiredWidth));
+    const finalHeight = Math.min(maxLogicalHeight, Math.max(WINDOW_MIN_HEIGHT, desiredHeight));
+
+    await getCurrentWindow().setSize(new LogicalSize(finalWidth, finalHeight));
+  } catch (e) {
+    console.warn("fitWindowToImage failed:", e);
+  }
+}
+
+function applyReadFailure() {
+  const failedIndex = currentIndex;
+  images.splice(failedIndex, 1);
+  if (images.length === 0) {
+    currentIndex = -1;
+  } else if (failedIndex >= images.length) {
+    currentIndex = images.length - 1;
+  } else {
+    currentIndex = failedIndex;
+  }
+  $img.src = "";
+  $img.style.visibility = "hidden";
+  $info.classList.remove("show");
+  $info.textContent = "";
+  $errorOverlay.classList.remove("hidden");
+  updateToolbarVisibility();
+  updateOverlayHint();
+}
+
+async function showImage(index, options = {}) {
+  const { autoFitWindow = false } = options;
   if (images.length === 0) return;
   if (index < 0) index = images.length - 1;
   if (index >= images.length) index = 0;
 
-  const prevIndex = currentIndex;
+  const requestToken = showImageGate.next();
   currentIndex = index;
   scale = 1;
   imageScale = 1;
@@ -180,7 +291,11 @@ async function showImage(index) {
     activeFilter: "none"
   };
   hideCropRect();
-  exitCropMode();
+  isCropping = true;
+  $cropHint.classList.add("hidden");
+  $cropRatioMenu.classList.add("hidden");
+  $cropSizeLabel.classList.add("hidden");
+  setCropCursor("crosshair");
   closeAdjustPanel();
   updateTransform();
   $img.style.filter = "";
@@ -188,79 +303,74 @@ async function showImage(index) {
 
   const currentPath = images[currentIndex];
   let thumbUrl = null;
+  let finalUrl = null;
 
-  // 1. 先加载缩略图快速显示
+  const thumbPromise = invoke("read_thumbnail", { path: currentPath, max_size: 800 })
+    .then((thumbData) => {
+      const thumbBlob = new Blob([new Uint8Array(thumbData)], { type: "image/jpeg" });
+      return URL.createObjectURL(thumbBlob);
+    })
+    .catch((e) => {
+      console.error("[showImage] failed to load thumbnail:", e);
+      return null;
+    });
+
+  // 缩略图和原图并行读取，先到先用
+  const fullPromise = readImage(currentPath);
+
+  // 1. 先尝试显示缩略图
   try {
-    const thumbData = await invoke("read_thumbnail", { path: currentPath, max_size: 800 });
-    const thumbBlob = new Blob([new Uint8Array(thumbData)], { type: "image/jpeg" });
-    thumbUrl = URL.createObjectURL(thumbBlob);
-    revokeCurrentSrc();
-    $img.src = thumbUrl;
-    setInitialSize();
-    updateAdjustUI();
+    thumbUrl = await thumbPromise;
+    if (thumbUrl) {
+      await waitForImageReady(thumbUrl);
+      if (!showImageGate.isCurrent(requestToken)) {
+        revokeBlobUrl(thumbUrl);
+        return;
+      }
+      swapImageSource(thumbUrl);
+      setInitialSize();
+      updateAdjustUI();
+    }
   } catch (e) {
-    console.error("[showImage] failed to load thumbnail:", e);
+    console.error("[showImage] failed to decode thumbnail:", e);
+    revokeBlobUrl(thumbUrl);
+    thumbUrl = null;
   }
 
   // 2. 后台加载原图
-  let newUrl;
   try {
-    newUrl = await readImage(currentPath);
+    finalUrl = await fullPromise;
   } catch (e) {
+    if (!showImageGate.isCurrent(requestToken)) return;
     console.error("[showImage] failed to read image:", e);
-    const failedIndex = currentIndex;
-    images.splice(failedIndex, 1);
-    if (images.length === 0) {
-      currentIndex = -1;
-    } else if (failedIndex >= images.length) {
-      currentIndex = images.length - 1;
-    } else {
-      currentIndex = failedIndex;
-    }
-    $img.src = "";
-    $img.style.visibility = "hidden";
-    $info.classList.remove("show");
-    $info.textContent = "";
-    $errorOverlay.classList.remove("hidden");
+    applyReadFailure();
     return;
   }
 
-  // 3. 原图加载完成后替换
-  const finalUrl = newUrl;
-  await new Promise((resolve) => {
-    if ($img.complete && $img.naturalWidth > 0) {
-      resolve();
-    } else {
-      $img.onload = () => {
-        updateImageSize();
-        resolve();
-      };
-      $img.onerror = () => {
-        const failedIndex = currentIndex;
-        if (images.length === 0) {
-          currentIndex = -1;
-        } else if (failedIndex >= images.length) {
-          currentIndex = images.length - 1;
-        } else {
-          currentIndex = failedIndex;
-        }
-        $img.src = "";
-        $img.style.visibility = "hidden";
-        $info.classList.remove("show");
-        $info.textContent = "";
-        $errorOverlay.classList.remove("hidden");
-        resolve();
-      };
+  try {
+    await waitForImageReady(finalUrl);
+  } catch (e) {
+    if (!showImageGate.isCurrent(requestToken)) {
+      revokeBlobUrl(finalUrl);
+      return;
     }
-  });
+    console.error("[showImage] failed to decode image:", e);
+    revokeBlobUrl(finalUrl);
+    applyReadFailure();
+    return;
+  }
+
+  if (!showImageGate.isCurrent(requestToken)) {
+    revokeBlobUrl(finalUrl);
+    return;
+  }
 
   // 清理缩略图 URL
   if (thumbUrl && thumbUrl !== finalUrl) {
-    URL.revokeObjectURL(thumbUrl);
+    revokeBlobUrl(thumbUrl);
   }
 
-  revokeCurrentSrc();
-  $img.src = finalUrl;
+  swapImageSource(finalUrl);
 
   $overlay.classList.remove("show");
   $errorOverlay.classList.add("hidden");
@@ -270,6 +380,10 @@ async function showImage(index) {
   updateSaveButtonState();
   updateToolbarVisibility();
   updateOverlayHint();
+
+  if (autoFitWindow) {
+    await fitWindowToImage();
+  }
 }
 
 async function loadDir(dirPath) {
@@ -280,7 +394,7 @@ async function loadDir(dirPath) {
       return;
     }
     images = list;
-    await showImage(0);
+    await showImage(0, { autoFitWindow: true });
   } catch (e) {
     console.error(e);
     alert("读取目录失败: " + e);
@@ -318,20 +432,32 @@ async function loadPath(path) {
 
   images = list;
   const targetIndex = list.findIndex((item) => normalizePath(item) === normalizePath(path));
-  await showImage(targetIndex >= 0 ? targetIndex : 0);
+  await showImage(targetIndex >= 0 ? targetIndex : 0, { autoFitWindow: true });
 }
 
-async function openIncomingPaths(paths) {
-  if (!Array.isArray(paths) || paths.length === 0) return;
-  const candidate = paths.find((item) => typeof item === "string" && (isImagePath(item) || item.length > 0));
-  if (!candidate) return;
-
+async function openIncomingPathsInternal(paths) {
   try {
+    const imageCandidates = collectIncomingImagePaths(paths, isImagePath);
+    if (imageCandidates.length > 1) {
+      images = imageCandidates;
+      await showImage(0, { autoFitWindow: true });
+      return;
+    }
+
+    const candidate = pickIncomingPath(paths, isImagePath);
+    if (!candidate) return;
     await loadPath(candidate);
   } catch (e) {
     console.error("openIncomingPaths failed", e);
     alert("打开文件失败: " + e);
   }
+}
+
+function openIncomingPaths(paths) {
+  openIncomingChain = openIncomingChain.then(() => openIncomingPathsInternal(paths));
+  return openIncomingChain.catch((e) => {
+    console.error("openIncomingPaths chain failed", e);
+  });
 }
 
 async function openImage() {
@@ -385,7 +511,11 @@ async function resetView() {
   updateTransform();
   cropRegion = null;
   hideCropRect();
-  exitCropMode();
+  isCropping = true;
+  $cropHint.classList.add("hidden");
+  $cropRatioMenu.classList.add("hidden");
+  $cropSizeLabel.classList.add("hidden");
+  setCropCursor("crosshair");
   closeAdjustPanel();
   resetSizeInputs();
 
@@ -482,9 +612,8 @@ async function saveImage() {
 
   if (cropRegion) {
     canvas = await applyCropToCanvas(canvas);
-    cropRegion = null;
-    hideCropRect();
-    exitCropMode();
+    isCropping = true;
+    clearCropSelection();
   }
 
   const mime = getMimeType(images[currentIndex]);
@@ -548,6 +677,17 @@ function hideCropRect() {
   $cropRect.classList.add("hidden");
 }
 
+function clearCropSelection() {
+  cropRegion = null;
+  tempCrop = null;
+  cropStart = null;
+  hideCropRect();
+  $cropSizeLabel.classList.add("hidden");
+  $cropRatioMenu.classList.add("hidden");
+  setCropCursor(isCropping ? "crosshair" : "default");
+  updateSaveButtonState();
+}
+
 function updateCropRect(x, y, w, h) {
   $cropRect.style.left = `${x}px`;
   $cropRect.style.top = `${y}px`;
@@ -569,16 +709,20 @@ function updateCropRect(x, y, w, h) {
 function enterCropMode() {
   if (images.length === 0) return;
   isCropping = true;
-  $cropHint.classList.remove("hidden");
-  $viewer.style.cursor = "crosshair";
+  $cropHint.classList.add("hidden");
+  setCropCursor("crosshair");
 }
 
 function exitCropMode() {
   isCropping = false;
   $cropHint.classList.add("hidden");
-  $viewer.style.cursor = "default";
+  setCropCursor("default");
   cropStart = null;
   tempCrop = null;
+  isDraggingCrop = false;
+  isResizingCrop = false;
+  resizeHandle = null;
+  cropDragStartRect = null;
   $cropRatioMenu.classList.add("hidden");
   $cropSizeLabel.classList.add("hidden");
 }
@@ -589,13 +733,88 @@ function toggleCropMode() {
     cropRegion = null;
     currentCropRatio = 0;
     document.querySelectorAll(".ratio-item").forEach((el) => el.classList.remove("active"));
-    hideCropRect();
-    $cropRatioMenu.classList.add("hidden");
-    $cropSizeLabel.classList.add("hidden");
+    clearCropSelection();
   } else {
     enterCropMode();
-    $cropRatioMenu.classList.remove("hidden");
+    if (cropRegion) {
+      $cropRatioMenu.classList.remove("hidden");
+    }
   }
+}
+
+function setCropCursor(cursor) {
+  const resolved = cursor || "crosshair";
+  currentCropCursor = resolved;
+  $viewer.style.cursor = resolved;
+  $img.style.cursor = resolved;
+}
+
+function getCropHitHandle(mouseX, mouseY, threshold = 8) {
+  if (!cropRegion) return null;
+  const { x, y, width, height } = cropRegion;
+  const right = x + width;
+  const bottom = y + height;
+
+  const nearLeft = Math.abs(mouseX - x) <= threshold;
+  const nearRight = Math.abs(mouseX - right) <= threshold;
+  const nearTop = Math.abs(mouseY - y) <= threshold;
+  const nearBottom = Math.abs(mouseY - bottom) <= threshold;
+  const insideX = mouseX >= x && mouseX <= right;
+  const insideY = mouseY >= y && mouseY <= bottom;
+
+  if (nearLeft && nearTop) return "nw";
+  if (nearRight && nearTop) return "ne";
+  if (nearLeft && nearBottom) return "sw";
+  if (nearRight && nearBottom) return "se";
+  if (nearTop && insideX) return "n";
+  if (nearBottom && insideX) return "s";
+  if (nearLeft && insideY) return "w";
+  if (nearRight && insideY) return "e";
+  if (insideX && insideY) return "move";
+  return null;
+}
+
+function cursorFromCropHandle(handle, dragging = false) {
+  if (handle === "move") return dragging ? "grabbing" : "grab";
+  if (handle === "n" || handle === "s") return "ns-resize";
+  if (handle === "e" || handle === "w") return "ew-resize";
+  if (handle === "ne" || handle === "sw") return "nesw-resize";
+  if (handle === "nw" || handle === "se") return "nwse-resize";
+  return "crosshair";
+}
+
+function clampCropToBounds(region, bounds) {
+  const out = { ...region };
+  if (out.width < 1) out.width = 1;
+  if (out.height < 1) out.height = 1;
+  if (out.x < bounds.left) out.x = bounds.left;
+  if (out.y < bounds.top) out.y = bounds.top;
+  if (out.x + out.width > bounds.right) out.width = bounds.right - out.x;
+  if (out.y + out.height > bounds.bottom) out.height = bounds.bottom - out.y;
+  if (out.width < 1) out.width = 1;
+  if (out.height < 1) out.height = 1;
+  return out;
+}
+
+function resizeCropRegionWithHandle(rect, handle, mouseX, mouseY, bounds) {
+  let left = rect.x;
+  let top = rect.y;
+  let right = rect.x + rect.width;
+  let bottom = rect.y + rect.height;
+
+  if (handle.includes("w")) left = Math.min(mouseX, right - 1);
+  if (handle.includes("e")) right = Math.max(mouseX, left + 1);
+  if (handle.includes("n")) top = Math.min(mouseY, bottom - 1);
+  if (handle.includes("s")) bottom = Math.max(mouseY, top + 1);
+
+  const resized = {
+    x: left,
+    y: top,
+    width: right - left,
+    height: bottom - top,
+  };
+
+  return clampCropToBounds(resized, bounds);
 }
 
 async function applyCropToCanvas(sourceCanvas) {
@@ -654,15 +873,15 @@ async function confirmCrop() {
   revokeCurrentSrc();
   $img.src = url;
 
-  cropRegion = null;
-  hideCropRect();
+  clearCropSelection();
   rotation = 0;
   scale = 1;
   imageOffset = { x: 0, y: 0 };
   updateTransform();
   hasChanges = true;
   updateSaveButtonState();
-  exitCropMode();
+  isCropping = true;
+  setCropCursor("crosshair");
 }
 
 // 键盘事件
@@ -684,10 +903,7 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault();
     confirmCrop();
   } else if (e.key === "Escape" && isCropping) {
-    exitCropMode();
-    cropRegion = null;
-    hideCropRect();
-    updateSaveButtonState();
+    clearCropSelection();
   } else if ((e.ctrlKey || e.metaKey) && e.key === "s") {
     e.preventDefault();
     saveImage();
@@ -735,36 +951,81 @@ $img.addEventListener("dblclick", toggleZoom);
 let isDraggingCrop = false;
 let dragOffset = { x: 0, y: 0 };
 
+function getImageBoundsInViewer() {
+  const viewerRect = $viewer.getBoundingClientRect();
+  const imgRect = $img.getBoundingClientRect();
+  const left = imgRect.left - viewerRect.left;
+  const top = imgRect.top - viewerRect.top;
+  return {
+    left,
+    top,
+    right: left + imgRect.width,
+    bottom: top + imgRect.height,
+  };
+}
+
+function clampPointToBounds(x, y, bounds) {
+  return {
+    x: Math.max(bounds.left, Math.min(bounds.right, x)),
+    y: Math.max(bounds.top, Math.min(bounds.bottom, y)),
+  };
+}
+
 $viewer.addEventListener("mousedown", (e) => {
   if (e.button !== 0) return;
+  if (images.length === 0) return;
 
   const viewerRect = $viewer.getBoundingClientRect();
   const mouseX = e.clientX - viewerRect.left;
   const mouseY = e.clientY - viewerRect.top;
+  const bounds = getImageBoundsInViewer();
 
   // 如果在裁剪模式
   if (isCropping) {
-    // 检查是否点击在裁剪框内（如果是,则拖动整个框）
-    if (cropRegion) {
-      const { x, y, width, height } = cropRegion;
-      if (mouseX >= x && mouseX <= x + width && mouseY >= y && mouseY <= y + height) {
-        isDraggingCrop = true;
-        dragOffset = { x: mouseX - x, y: mouseY - y };
-        cropStart = null;
-        e.stopPropagation();
-        return;
-      }
+    const hit = getCropHitHandle(mouseX, mouseY);
+    if (hit === "move" && cropRegion) {
+      isDraggingCrop = true;
+      isResizingCrop = false;
+      dragOffset = { x: mouseX - cropRegion.x, y: mouseY - cropRegion.y };
+      cropStart = null;
+      setCropCursor(cursorFromCropHandle(hit, true));
+      e.stopPropagation();
+      return;
     }
-    // 否则开始绘制新的裁剪区域
-    cropStart = { x: mouseX, y: mouseY };
+
+    if (hit && hit !== "move" && cropRegion) {
+      isDraggingCrop = false;
+      isResizingCrop = true;
+      resizeHandle = hit;
+      cropDragStartRect = { ...cropRegion };
+      cropStart = null;
+      setCropCursor(cursorFromCropHandle(hit, true));
+      e.stopPropagation();
+      return;
+    }
+
+    if (!hit && cropRegion) {
+      clearCropSelection();
+      return;
+    }
+
+    if (mouseX < bounds.left || mouseX > bounds.right || mouseY < bounds.top || mouseY > bounds.bottom) {
+      return;
+    }
+
+    const clamped = clampPointToBounds(mouseX, mouseY, bounds);
+    cropStart = { x: clamped.x, y: clamped.y };
     isDraggingCrop = false;
+    isResizingCrop = false;
+    resizeHandle = null;
+    cropDragStartRect = null;
+    setCropCursor("crosshair");
     return;
   }
 
   // 非裁剪模式：检查是否点击在图片上,如果是则启动图片拖动
-  const imgRect = $img.getBoundingClientRect();
-  if (mouseX >= imgRect.left - viewerRect.left && mouseX <= imgRect.right - viewerRect.left &&
-      mouseY >= imgRect.top - viewerRect.top && mouseY <= imgRect.bottom - viewerRect.top) {
+  if (mouseX >= bounds.left && mouseX <= bounds.right &&
+      mouseY >= bounds.top && mouseY <= bounds.bottom) {
     isDraggingImage = true;
     imageDragStart = { x: mouseX, y: mouseY };
     $img.classList.add("dragging");
@@ -773,12 +1034,7 @@ $viewer.addEventListener("mousedown", (e) => {
 
 window.addEventListener("mousemove", (e) => {
   const viewerRect = $viewer.getBoundingClientRect();
-  const imgRect = $img.getBoundingClientRect();
-
-  const imgLeft = imgRect.left - viewerRect.left;
-  const imgTop = imgRect.top - viewerRect.top;
-  const imgRight = imgLeft + imgRect.width;
-  const imgBottom = imgTop + imgRect.height;
+  const bounds = getImageBoundsInViewer();
 
   let cx = e.clientX - viewerRect.left;
   let cy = e.clientY - viewerRect.top;
@@ -804,28 +1060,40 @@ window.addEventListener("mousemove", (e) => {
     let newY = cy - dragOffset.y;
 
     // 确保不超出边界
-    if (newX < imgLeft) { newX = imgLeft; }
-    if (newY < imgTop) { newY = imgTop; }
-    if (newX + cropRegion.width > imgRight) { newX = imgRight - cropRegion.width; }
-    if (newY + cropRegion.height > imgBottom) { newY = imgBottom - cropRegion.height; }
+    if (newX < bounds.left) newX = bounds.left;
+    if (newY < bounds.top) newY = bounds.top;
+    if (newX + cropRegion.width > bounds.right) newX = bounds.right - cropRegion.width;
+    if (newY + cropRegion.height > bounds.bottom) newY = bounds.bottom - cropRegion.height;
 
     cropRegion.x = newX;
     cropRegion.y = newY;
     updateCropRect(cropRegion.x, cropRegion.y, cropRegion.width, cropRegion.height);
-    $btnSave.disabled = false;
+    updateSaveButtonState();
+    setCropCursor("grabbing");
     return;
   }
 
-  if (!cropStart) return;
+  if (isResizingCrop && resizeHandle && cropDragStartRect) {
+    const clamped = clampPointToBounds(cx, cy, bounds);
+    cropRegion = resizeCropRegionWithHandle(cropDragStartRect, resizeHandle, clamped.x, clamped.y, bounds);
+    updateCropRect(cropRegion.x, cropRegion.y, cropRegion.width, cropRegion.height);
+    updateSaveButtonState();
+    setCropCursor(cursorFromCropHandle(resizeHandle, true));
+    return;
+  }
 
-  cx = Math.max(imgLeft, Math.min(imgRight, cx));
-  cy = Math.max(imgTop, Math.min(imgBottom, cy));
+  if (!cropStart) {
+    setCropCursor(cursorFromCropHandle(getCropHitHandle(cx, cy)));
+    return;
+  }
 
-  cx = Math.max(imgLeft, Math.min(imgRight, cx));
-  cy = Math.max(imgTop, Math.min(imgBottom, cy));
+  const clampedCurrent = clampPointToBounds(cx, cy, bounds);
+  cx = clampedCurrent.x;
+  cy = clampedCurrent.y;
 
-  const startX = Math.max(imgLeft, Math.min(imgRight, cropStart.x));
-  const startY = Math.max(imgTop, Math.min(imgBottom, cropStart.y));
+  const clampedStart = clampPointToBounds(cropStart.x, cropStart.y, bounds);
+  const startX = clampedStart.x;
+  const startY = clampedStart.y;
 
   let x = Math.min(startX, cx);
   let y = Math.min(startY, cy);
@@ -842,18 +1110,19 @@ window.addEventListener("mousemove", (e) => {
       if (cy < cropStart.y) y = cropStart.y - h;
     }
     // 确保不超出图片边界
-    if (x < imgLeft) { x = imgLeft; }
-    if (y < imgTop) { y = imgTop; }
-    if (x + w > imgRight) { w = imgRight - x; h = w / currentCropRatio; }
-    if (y + h > imgBottom) { h = imgBottom - y; w = h * currentCropRatio; }
+    if (x < bounds.left) x = bounds.left;
+    if (y < bounds.top) y = bounds.top;
+    if (x + w > bounds.right) { w = bounds.right - x; h = w / currentCropRatio; }
+    if (y + h > bounds.bottom) { h = bounds.bottom - y; w = h * currentCropRatio; }
   }
 
   updateCropRect(x, y, w, h);
   tempCrop = { x, y, width: w, height: h };
+  setCropCursor("crosshair");
 
   // 裁剪过程中也启用保存按钮
   if (tempCrop && tempCrop.width > 2 && tempCrop.height > 2) {
-    $btnSave.disabled = false;
+    updateSaveButtonState();
   }
 });
 
@@ -868,13 +1137,24 @@ window.addEventListener("mouseup", () => {
   if (!isCropping) return;
   if (isDraggingCrop) {
     isDraggingCrop = false;
+    setCropCursor("grab");
+    return;
+  }
+
+  if (isResizingCrop) {
+    isResizingCrop = false;
+    cropDragStartRect = null;
+    setCropCursor(cursorFromCropHandle(resizeHandle));
+    resizeHandle = null;
     return;
   }
   cropStart = null;
   if (tempCrop && tempCrop.width > 2 && tempCrop.height > 2) {
     cropRegion = tempCrop;
+    $cropRatioMenu.classList.remove("hidden");
   }
   tempCrop = null;
+  setCropCursor("crosshair");
 });
 
 // 右键菜单
