@@ -1,2 +1,5 @@
-pyobjc
+pyinstaller
+py2app
+pyobjc-core
+pyobjc-framework-Cocoa
 psutil
