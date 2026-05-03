@@ -20,6 +20,7 @@ from AppKit import (
     NSEventMaskRightMouseUp,
     NSEventTypeRightMouseUp,
     NSFont,
+    NSLineBreakByClipping,
     NSLeftTextAlignment,
     NSMakeRect,
     NSMenu,
@@ -36,6 +37,8 @@ BOTTOM_LABEL_FONT_SIZE = 8.0
 VALUE_FONT_SIZE = 11.0
 NETWORK_FONT_SIZE = 9.0
 GAP_WIDTH = 2.0
+LEADING_CONTENT_OFFSET = -2.0
+NET_LEFT_MARGIN = 3.0
 STATUS_ITEM_MIN_WIDTH = 16.0
 PREFERENCES_KEY = "enabledMetrics"
 DEFAULTS_SUITE_NAME = "com.codex.mac-monitor"
@@ -49,11 +52,11 @@ METRIC_TITLES = {
     "net": "NET",
 }
 METRIC_WIDTHS = {
-    "cpu": 34.0,
-    "gpu": 34.0,
-    "mem": 34.0,
-    "ssd": 34.0,
-    "net": 36.0,
+    "cpu": 30.0,
+    "gpu": 30.0,
+    "mem": 30.0,
+    "ssd": 30.0,
+    "net": 34.0,
 }
 DEFAULT_ENABLED_METRICS = {
     "cpu": True,
@@ -69,6 +72,17 @@ GPU_USAGE_KEYS = (
     "GPU Activity %",
     "GPU Usage %",
     "GPU Utilization %",
+)
+IGNORED_NETWORK_INTERFACE_PREFIXES = (
+    "lo",
+    "utun",
+    "bridge",
+    "awdl",
+    "llw",
+    "anpi",
+    "gif",
+    "stf",
+    "ap",
 )
 
 
@@ -130,6 +144,8 @@ def calculate_status_item_width(visible_metrics: list[str]) -> float:
 
     total_width = sum(frame_width_for_metric(metric_key) for metric_key in visible_metrics)
     total_width += GAP_WIDTH * (len(visible_metrics) - 1)
+    if "net" in visible_metrics and visible_metrics.index("net") > 0:
+        total_width += NET_LEFT_MARGIN
     return total_width
 
 
@@ -138,9 +154,12 @@ STATUS_ITEM_WIDTH = calculate_status_item_width(list(METRIC_ORDER))
 
 def layout_columns(total_width: float, visible_metrics: Tuple[str, ...] | list[str]) -> dict[str, dict[str, float]]:
     columns: dict[str, dict[str, float]] = {}
-    current_x = 0.0
+    current_x = LEADING_CONTENT_OFFSET
 
     for index, metric_key in enumerate(visible_metrics):
+        if metric_key == "net" and index > 0:
+            current_x += NET_LEFT_MARGIN
+
         width = frame_width_for_metric(metric_key)
         columns[metric_key] = {"x": current_x, "width": width}
         current_x += width
@@ -154,11 +173,18 @@ def layout_columns(total_width: float, visible_metrics: Tuple[str, ...] | list[s
 
 
 def format_rate(bytes_per_second: float) -> str:
-    if bytes_per_second < 1024:
+    if bytes_per_second < 1000:
         return f"{int(round(bytes_per_second))}B"
-    if bytes_per_second < 1024 * 1024:
-        return f"{int(round(bytes_per_second / 1024))}K"
-    return f"{int(round(bytes_per_second / (1024 * 1024)))}M"
+    if bytes_per_second < 1_000_000:
+        return f"{int(bytes_per_second / 1000)}K"
+    if bytes_per_second < 10_000_000:
+        tenths_of_megabytes = int(bytes_per_second / 100_000)
+        whole_megabytes = tenths_of_megabytes // 10
+        decimal_digit = tenths_of_megabytes % 10
+        return f"{whole_megabytes}.{decimal_digit}M"
+    if bytes_per_second < 1_000_000_000:
+        return f"{int(bytes_per_second / 1_000_000)}M"
+    return f"{int(bytes_per_second / 1_000_000_000)}G"
 
 
 def parse_percentage_value(value: Any) -> int | None:
@@ -247,27 +273,61 @@ def read_ssd_percentage() -> str:
     )
 
 
+def aggregate_network_counters(pernic_counters: Mapping[str, Any]) -> tuple[int, int]:
+    filtered_counters = []
+
+    for interface_name, counters in pernic_counters.items():
+        normalized_name = interface_name.lower()
+        if normalized_name.startswith(IGNORED_NETWORK_INTERFACE_PREFIXES):
+            continue
+        filtered_counters.append(counters)
+
+    selected_counters = filtered_counters or list(pernic_counters.values())
+    total_sent = sum(max(0, int(getattr(counters, "bytes_sent", 0))) for counters in selected_counters)
+    total_recv = sum(max(0, int(getattr(counters, "bytes_recv", 0))) for counters in selected_counters)
+    return total_sent, total_recv
+
+
+def read_network_counters() -> tuple[int, int]:
+    pernic_counters = psutil.net_io_counters(pernic=True)
+    if pernic_counters:
+        return aggregate_network_counters(pernic_counters)
+
+    counters = psutil.net_io_counters()
+    return counters.bytes_sent, counters.bytes_recv
+
+
 def read_metrics(
     previous_counters: Tuple[int, int],
     interval_seconds: float,
+    network_counters_reader=read_network_counters,
+    cpu_reader=lambda: psutil.cpu_percent(interval=None),
+    gpu_reader=read_gpu_percentage,
+    memory_reader=lambda: psutil.virtual_memory().percent,
+    ssd_reader=read_ssd_percentage,
 ) -> Tuple[str, str, str, str, str, str, Tuple[int, int]]:
     try:
-        cpu_text = f"{clamp_percentage(psutil.cpu_percent(interval=None))}%"
+        cpu_text = f"{clamp_percentage(cpu_reader())}%"
     except Exception:
         cpu_text = "--%"
 
-    gpu_text = read_gpu_percentage()
+    try:
+        gpu_text = gpu_reader()
+    except Exception:
+        gpu_text = "--%"
 
     try:
-        mem_text = f"{clamp_percentage(psutil.virtual_memory().percent)}%"
+        mem_text = f"{clamp_percentage(memory_reader())}%"
     except Exception:
         mem_text = "--%"
 
-    ssd_text = read_ssd_percentage()
+    try:
+        ssd_text = ssd_reader()
+    except Exception:
+        ssd_text = "--%"
 
     try:
-        counters = psutil.net_io_counters()
-        current_counters = (counters.bytes_sent, counters.bytes_recv)
+        current_counters = network_counters_reader()
         sent_delta = max(0, current_counters[0] - previous_counters[0])
         recv_delta = max(0, current_counters[1] - previous_counters[1])
         upload_text = f"▲ {format_rate(sent_delta / interval_seconds)}"
@@ -289,6 +349,11 @@ def build_label(frame, font_size: float, weight: float = 0.0, alignment: int = N
     label.setSelectable_(False)
     label.setAlignment_(alignment)
     label.setTextColor_(NSColor.labelColor())
+    cell = label.cell()
+    if cell is not None:
+        cell.setWraps_(False)
+        cell.setScrollable_(False)
+        cell.setLineBreakMode_(NSLineBreakByClipping)
     if weight:
         label.setFont_(NSFont.systemFontOfSize_weight_(font_size, weight))
     else:
@@ -449,8 +514,7 @@ class StatusMonitorApp(NSObject):
 
         psutil.cpu_percent(interval=None)
         try:
-            counters = psutil.net_io_counters()
-            self.last_net_counters = (counters.bytes_sent, counters.bytes_recv)
+            self.last_net_counters = read_network_counters()
         except Exception:
             self.last_net_counters = (0, 0)
         self.applyMetricVisibility()

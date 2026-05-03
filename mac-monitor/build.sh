@@ -5,13 +5,16 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 APP_ENTRY="$SCRIPT_DIR/app.py"
 BUILD_DIR="$SCRIPT_DIR/build"
 DIST_DIR="$SCRIPT_DIR/dist"
-SETUP_FILE="$SCRIPT_DIR/.build_py2app_setup.py"
 SPEC_FILE="$SCRIPT_DIR/menubar_monitor.spec"
 ICON_FILE="$SCRIPT_DIR/assets/app-icon.icns"
 
+APP_NAME="Mac Monitor"
+APP_BUNDLE="${APP_NAME}.app"
+SAFE_APP_NAME="Mac-Monitor"
+TARGET_ARCH="arm64"
+
 CHECK_ONLY=0
 CLEAN_FIRST=0
-BACKEND="auto"
 
 MISSING_ITEMS=""
 INSTALL_HINTS=""
@@ -20,10 +23,11 @@ usage() {
     cat <<'EOF'
 Usage: ./build.sh [--check] [--clean]
 
+This script only builds macOS Apple Silicon (arm64) DMG.
+
 Options:
   --check   Only check environment, do not build
   --clean   Remove build/ and dist/ before building
-  --backend <pyinstaller|py2app|auto>  Build backend (default: auto)
   -h, --help  Show help
 EOF
 }
@@ -39,7 +43,7 @@ check_command() {
     cmd="$1"
     hint="$2"
     if ! command -v "$cmd" >/dev/null 2>&1; then
-        append_missing "缺少命令: $cmd" "$hint"
+        append_missing "缺少命令: ${cmd}" "$hint"
     fi
 }
 
@@ -47,8 +51,8 @@ check_python_import() {
     import_expr="$1"
     package_hint="$2"
     if ! python3 -c "$import_expr" >/dev/null 2>&1; then
-        append_missing "缺少 Python 依赖: $package_hint" \
-            "python3 -m pip install $package_hint"
+        append_missing "缺少 Python 依赖: ${package_hint}" \
+            "python3 -m pip install ${package_hint}"
     fi
 }
 
@@ -62,120 +66,117 @@ print_missing_and_exit_if_needed() {
     fi
 }
 
-resolve_backend() {
-    case "$BACKEND" in
-        auto)
-            if [ -f "$SPEC_FILE" ]; then
-                BACKEND="pyinstaller"
-            else
-                BACKEND="py2app"
-            fi
-            ;;
-        pyinstaller|py2app)
+check_binary_arch_support() {
+    binary_path="$1"
+    target_arch="$2"
+    label="$3"
+
+    archs="$(lipo -archs "$binary_path" 2>/dev/null || true)"
+    if [ -z "$archs" ]; then
+        return 0
+    fi
+
+    case " $archs " in
+        *" $target_arch "*)
+            return 0
             ;;
         *)
-            printf '%s\n' "不支持的 backend: $BACKEND"
-            usage
-            exit 2
+            printf '%s\n' "架构预检查失败：${label} 不支持目标架构 ${target_arch}。"
+            printf '%s\n' "  文件: ${binary_path}"
+            printf '%s\n' "  当前架构: ${archs}"
+            return 1
             ;;
     esac
 }
 
 check_environment() {
     if [ "$(uname -s)" != "Darwin" ]; then
-        append_missing "当前系统不是 macOS（py2app 仅支持 macOS）" \
+        append_missing "当前系统不是 macOS（仅支持打包 macOS dmg）" \
             "请在 macOS 上执行构建"
     fi
 
     if [ ! -f "$APP_ENTRY" ]; then
-        append_missing "未找到入口文件: $APP_ENTRY" \
+        append_missing "未找到入口文件: ${APP_ENTRY}" \
             "确认项目目录完整，并包含 app.py"
     fi
 
+    if [ ! -f "$SPEC_FILE" ]; then
+        append_missing "缺少打包配置: ${SPEC_FILE}" \
+            "请确认 menubar_monitor.spec 存在"
+    fi
+
+    if [ ! -f "$ICON_FILE" ]; then
+        append_missing "缺少图标文件: ${ICON_FILE}" \
+            "请补充图标文件后重试"
+    fi
+
     check_command "python3" "请安装 Python 3（https://www.python.org/downloads/）"
+    check_command "hdiutil" "macOS 自带 hdiutil，若不可用请确认系统工具链完整"
+    check_command "lipo" "macOS 自带 lipo，若不可用请确认 Xcode Command Line Tools 已安装"
 
     if command -v python3 >/dev/null 2>&1; then
         if ! python3 -m pip --version >/dev/null 2>&1; then
             append_missing "python3 可用，但 pip 不可用" \
                 "python3 -m ensurepip --upgrade"
         fi
-    fi
 
-    if command -v python3 >/dev/null 2>&1; then
-        case "$BACKEND" in
-            pyinstaller)
-                check_python_import "import PyInstaller" "pyinstaller"
-                check_python_import "import psutil" "psutil"
-                check_python_import "import objc, AppKit, Foundation" \
-                    "pyobjc-core pyobjc-framework-Cocoa"
-                ;;
-            py2app)
-                check_python_import "import setuptools" "setuptools"
-                check_python_import "import py2app" "py2app"
-                check_python_import "import psutil" "psutil"
-                check_python_import "import objc, AppKit, Foundation" \
-                    "pyobjc-core pyobjc-framework-Cocoa"
-                ;;
-        esac
-    fi
-
-    if [ "$BACKEND" = "pyinstaller" ] && [ ! -f "$SPEC_FILE" ]; then
-        append_missing "缺少打包配置: $SPEC_FILE" \
-            "请确认 menubar_monitor.spec 存在"
-    fi
-
-    if [ ! -f "$ICON_FILE" ]; then
-        append_missing "缺少图标文件: $ICON_FILE" \
-            "请补充图标文件后重试"
+        check_python_import "import PyInstaller" "pyinstaller"
+        check_python_import "import psutil" "psutil"
+        check_python_import "import objc, AppKit, Foundation" \
+            "pyobjc-core pyobjc-framework-Cocoa"
     fi
 
     print_missing_and_exit_if_needed
 }
 
-cleanup_temp_setup() {
-    rm -f "$SETUP_FILE"
+verify_arm64_prerequisites() {
+    python_bin="$(python3 -c 'import sys; print(sys.executable)' 2>/dev/null || true)"
+    psutil_so="$(python3 -c 'import psutil, psutil._psutil_osx as m; print(m.__file__)' 2>/dev/null || true)"
+
+    if [ -z "$python_bin" ] || [ -z "$psutil_so" ]; then
+        printf '%s\n' "arm64 预检查失败：Python 或 psutil 不可用。"
+        return 1
+    fi
+
+    check_binary_arch_support "$python_bin" "$TARGET_ARCH" "Python 解释器"
+    check_binary_arch_support "$psutil_so" "$TARGET_ARCH" "psutil 扩展模块"
 }
 
-write_setup_file() {
-    cat >"$SETUP_FILE" <<'PY'
-from setuptools import setup
+create_install_readme() {
+    readme_path="$1"
+    cat > "$readme_path" <<'EOF'
+安装说明（macOS）
 
-APP = ["app.py"]
-OPTIONS = {
-    "argv_emulation": False,
-    "iconfile": "assets/app-icon.icns",
-    "includes": ["objc", "psutil", "AppKit", "Foundation"],
-    "excludes": [
-        "distutils",
-        "numpy",
-        "PyInstaller",
-        "pytest",
-        "setuptools",
-        "test",
-        "tests",
-        "tkinter",
-        "unittest",
-    ],
-    "plist": {
-        "CFBundleDisplayName": "Mac Monitor",
-        "CFBundleExecutable": "Mac Monitor",
-        "CFBundleIdentifier": "com.codex.mac-menu-bar-monitor",
-        "CFBundleName": "Mac Monitor",
-        "CFBundleShortVersionString": "0.1.0",
-        "CFBundleVersion": "0.1.0",
-        "LSUIElement": True,
-        "NSHumanReadableCopyright": "Codex",
-    },
-    "packages": ["objc", "psutil", "AppKit", "Foundation"],
-    "strip": True,
+1. 将左侧的 "Mac Monitor.app" 拖动到 "Applications" 文件夹。
+2. 在“应用程序”中打开 Mac Monitor。
+3. 首次运行如遇到安全提示，请在“系统设置 -> 隐私与安全性”里允许打开。
+EOF
 }
 
-setup(
-    app=APP,
-    name="Mac Monitor",
-    options={"py2app": OPTIONS},
-)
-PY
+create_dmg() {
+    app_bundle_path="$1"
+    dmg_dir="$DIST_DIR/dmg"
+    final_dmg="$dmg_dir/${SAFE_APP_NAME}-arm64.dmg"
+    tmp_dmg="$dmg_dir/.${SAFE_APP_NAME}-arm64.tmp.dmg"
+    staging_dir="$DIST_DIR/dmg-staging"
+
+    rm -rf "$staging_dir"
+    mkdir -p "$staging_dir" "$dmg_dir"
+
+    cp -R "$app_bundle_path" "$staging_dir/"
+    ln -s /Applications "$staging_dir/Applications"
+    create_install_readme "$staging_dir/安装说明.txt"
+
+    rm -f "$final_dmg" "$tmp_dmg"
+    hdiutil create \
+        -volname "$APP_NAME" \
+        -srcfolder "$staging_dir" \
+        -ov \
+        -format UDZO \
+        "$tmp_dmg" >/dev/null
+
+    mv "$tmp_dmg" "$final_dmg"
+    printf '%s\n' "已生成 DMG: ${final_dmg}"
 }
 
 run_build() {
@@ -183,20 +184,24 @@ run_build() {
         rm -rf "$BUILD_DIR" "$DIST_DIR"
     fi
 
-    case "$BACKEND" in
-        pyinstaller)
-            (cd "$SCRIPT_DIR" && python3 -m PyInstaller --clean --noconfirm "$SPEC_FILE")
-            ;;
-        py2app)
-            trap cleanup_temp_setup EXIT INT TERM
-            write_setup_file
-            (cd "$SCRIPT_DIR" && python3 "$SETUP_FILE" py2app)
-            cleanup_temp_setup
-            trap - EXIT INT TERM
-            ;;
-    esac
+    if ! verify_arm64_prerequisites; then
+        printf '%s\n' "请先安装 arm64 版本依赖后重试。"
+        exit 1
+    fi
 
-    printf '%s\n' "构建完成（backend: ${BACKEND:-unknown}）：${DIST_DIR}/Mac Monitor.app"
+    if ! (cd "$SCRIPT_DIR" && PYI_TARGET_ARCH="$TARGET_ARCH" python3 -m PyInstaller --clean --noconfirm "$SPEC_FILE"); then
+        printf '%s\n' "PyInstaller 构建失败（arch: ${TARGET_ARCH}）。"
+        exit 1
+    fi
+
+    built_app="$DIST_DIR/$APP_BUNDLE"
+    if [ ! -d "$built_app" ]; then
+        printf '%s\n' "构建失败：未找到应用包 ${built_app}"
+        exit 1
+    fi
+
+    create_dmg "$built_app"
+    printf '%s\n' "构建完成。DMG 输出目录: ${DIST_DIR}/dmg"
 }
 
 while [ $# -gt 0 ]; do
@@ -206,18 +211,6 @@ while [ $# -gt 0 ]; do
             ;;
         --clean)
             CLEAN_FIRST=1
-            ;;
-        --backend)
-            shift
-            if [ $# -eq 0 ]; then
-                printf '%s\n' "--backend 需要参数"
-                usage
-                exit 2
-            fi
-            BACKEND="$1"
-            ;;
-        --backend=*)
-            BACKEND="${1#*=}"
             ;;
         -h|--help)
             usage
@@ -232,11 +225,10 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-resolve_backend
 check_environment
 
 if [ "$CHECK_ONLY" -eq 1 ]; then
-    printf '%s\n' "环境检查通过（backend: $BACKEND）。"
+    printf '%s\n' "环境检查通过。默认仅构建架构: ${TARGET_ARCH}"
     exit 0
 fi
 

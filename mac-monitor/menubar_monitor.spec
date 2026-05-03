@@ -1,6 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 
+import os
 from PyInstaller.utils.hooks import collect_submodules
 
 
@@ -52,7 +53,7 @@ exe = EXE(
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
-    target_arch=None,
+    target_arch=os.environ.get("PYI_TARGET_ARCH") or None,
     codesign_identity=None,
     entitlements_file=None,
 )

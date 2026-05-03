@@ -1,10 +1,12 @@
 import unittest
 from collections import UserDict
+from types import SimpleNamespace
 
 from app import (
     DEFAULTS_SUITE_NAME,
     DEFAULT_ENABLED_METRICS,
     GAP_WIDTH,
+    aggregate_network_counters,
     METRIC_ORDER,
     PREFERENCES_KEY,
     STATUS_ITEM_MIN_WIDTH,
@@ -16,6 +18,7 @@ from app import (
     layout_columns,
     normalize_enabled_metrics,
     parse_percentage_value,
+    read_metrics,
     read_ssd_percentage_from_paths,
     toggle_metric_selection,
     visible_metrics_in_order,
@@ -70,6 +73,33 @@ class GpuParsingTests(unittest.TestCase):
 
 
 class DiskAndNetworkFormattingTests(unittest.TestCase):
+    def test_aggregate_network_counters_ignores_loopback_and_tunnel_interfaces(self):
+        pernic_counters = {
+            "lo0": SimpleNamespace(bytes_sent=5_000_000, bytes_recv=5_000_000),
+            "utun0": SimpleNamespace(bytes_sent=3_000_000, bytes_recv=3_000_000),
+            "en0": SimpleNamespace(bytes_sent=120_000, bytes_recv=8_400_000),
+        }
+
+        self.assertEqual(aggregate_network_counters(pernic_counters), (120_000, 8_400_000))
+
+    def test_read_metrics_uses_filtered_network_counters(self):
+        current_counters = (240_000, 16_800_000)
+
+        cpu_text, gpu_text, mem_text, ssd_text, upload_text, download_text, returned_counters = read_metrics(
+            previous_counters=(120_000, 8_400_000),
+            interval_seconds=2.0,
+            network_counters_reader=lambda: current_counters,
+            cpu_reader=lambda: 10.0,
+            gpu_reader=lambda: "15%",
+            memory_reader=lambda: 20.0,
+            ssd_reader=lambda: "30%",
+        )
+
+        self.assertEqual((cpu_text, gpu_text, mem_text, ssd_text), ("10%", "15%", "20%", "30%"))
+        self.assertEqual(upload_text, "▲ 60K")
+        self.assertEqual(download_text, "▼ 4.2M")
+        self.assertEqual(returned_counters, current_counters)
+
     def test_read_ssd_percentage_prefers_data_volume_over_root(self):
         usage_by_path = {
             "/": 7.0,
@@ -101,7 +131,21 @@ class DiskAndNetworkFormattingTests(unittest.TestCase):
     def test_format_rate_omits_per_second_suffix(self):
         self.assertEqual(format_rate(512), "512B")
         self.assertEqual(format_rate(2048), "2K")
-        self.assertEqual(format_rate(3 * 1024 * 1024), "3M")
+        self.assertEqual(format_rate(12 * 1024 * 1024), "12M")
+
+    def test_format_rate_promotes_1000k_to_1m(self):
+        self.assertEqual(format_rate(1_024_000), "1.0M")
+
+    def test_format_rate_keeps_three_digit_kilobytes(self):
+        self.assertEqual(format_rate(190_000), "190K")
+        self.assertEqual(format_rate(999_999), "999K")
+
+    def test_format_rate_keeps_one_decimal_between_one_and_ten_megabytes(self):
+        self.assertEqual(format_rate(4_200_000), "4.2M")
+        self.assertEqual(format_rate(9_990_000), "9.9M")
+
+    def test_format_rate_keeps_three_digit_megabytes(self):
+        self.assertEqual(format_rate(117_000_000), "117M")
 
 
 class VisibilityTests(unittest.TestCase):
@@ -197,18 +241,40 @@ class VisibilityTests(unittest.TestCase):
 
 
 class LayoutTests(unittest.TestCase):
+    def test_first_metric_shifts_left_to_reduce_status_item_padding(self):
+        columns = layout_columns(
+            calculate_status_item_width(["cpu", "mem", "net"]),
+            ["cpu", "mem", "net"],
+        )
+
+        self.assertEqual(columns["cpu"]["x"], -2.0)
+
+    def test_net_metric_adds_extra_left_margin(self):
+        columns = layout_columns(
+            calculate_status_item_width(["cpu", "mem", "net"]),
+            ["cpu", "mem", "net"],
+        )
+
+        self.assertEqual(
+            columns["net"]["x"],
+            -2.0 + frame_width_for_metric("cpu") + frame_width_for_metric("mem") + (GAP_WIDTH * 2.0) + 3.0,
+        )
+
+    def test_net_metric_reserves_enough_width_for_rate_text(self):
+        self.assertGreaterEqual(frame_width_for_metric("net"), 34.0)
+
     def test_layout_columns_fit_full_status_width(self):
         columns = layout_columns(STATUS_ITEM_WIDTH, METRIC_ORDER)
 
-        self.assertEqual(columns["cpu"]["x"], 0.0)
-        self.assertEqual(columns["gpu"]["x"], frame_width_for_metric("cpu") + GAP_WIDTH)
+        self.assertEqual(columns["cpu"]["x"], -2.0)
+        self.assertEqual(columns["gpu"]["x"], -2.0 + frame_width_for_metric("cpu") + GAP_WIDTH)
         self.assertEqual(
             columns["mem"]["x"],
-            frame_width_for_metric("cpu") + frame_width_for_metric("gpu") + (GAP_WIDTH * 2.0),
+            -2.0 + frame_width_for_metric("cpu") + frame_width_for_metric("gpu") + (GAP_WIDTH * 2.0),
         )
         self.assertEqual(
             columns["ssd"]["x"],
-            frame_width_for_metric("cpu")
+            -2.0 + frame_width_for_metric("cpu")
             + frame_width_for_metric("gpu")
             + frame_width_for_metric("mem")
             + (GAP_WIDTH * 3.0),
@@ -224,18 +290,18 @@ class LayoutTests(unittest.TestCase):
             ["cpu", "mem", "net"],
         )
 
-        self.assertEqual(columns["cpu"]["x"], 0.0)
-        self.assertEqual(columns["mem"]["x"], frame_width_for_metric("cpu") + GAP_WIDTH)
+        self.assertEqual(columns["cpu"]["x"], -2.0)
+        self.assertEqual(columns["mem"]["x"], -2.0 + frame_width_for_metric("cpu") + GAP_WIDTH)
         self.assertEqual(
             columns["net"]["x"],
-            frame_width_for_metric("cpu") + frame_width_for_metric("mem") + (GAP_WIDTH * 2.0),
+            -2.0 + frame_width_for_metric("cpu") + frame_width_for_metric("mem") + (GAP_WIDTH * 2.0) + 3.0,
         )
 
     def test_calculate_status_item_width_has_minimum_for_empty_selection(self):
         self.assertEqual(calculate_status_item_width([]), STATUS_ITEM_MIN_WIDTH)
 
     def test_default_width_reflects_narrower_gap(self):
-        self.assertEqual(calculate_status_item_width(["cpu", "mem", "net"]), 108.0)
+        self.assertEqual(calculate_status_item_width(["cpu", "mem", "net"]), 101.0)
 
 
 if __name__ == "__main__":
