@@ -5,8 +5,8 @@ import { useImageProcessing } from '@/hooks/useImageProcessing';
 import type { ImageFileInfo, ProcessingOptions } from '@/types';
 
 type ResizeMode = 'none' | 'scale' | 'dimensions';
-type CompressionType = 'none' | 'preset' | 'quality';
-type CompressionPreset = 'standard';
+type CompressionType = 'none' | 'preset' | 'quality' | 'indexedColor';
+type CompressionPreset = 'standard' | '128' | '256';
 type ConvertFormat = 'none' | 'png' | 'jpg';
 type FileStatus = 'idle' | 'processing' | 'done' | 'error' | 'skipped';
 
@@ -109,6 +109,14 @@ function getCommonExtension(paths: string[]) {
   return extensions.size === 1 ? [...extensions][0] : '';
 }
 
+function calculateWidthFromHeight(width: number, height: number, targetHeight: number) {
+  if (height <= 0 || targetHeight <= 0) {
+    return '';
+  }
+
+  return String(Math.max(1, Math.round((width / height) * targetHeight)));
+}
+
 function isSupportedImagePath(path: string) {
   const extension = path.split('.').pop()?.toLowerCase() || '';
   return SUPPORTED_EXTENSIONS.has(extension);
@@ -187,6 +195,8 @@ export function ImageProcessor({ outputDir, concurrency }: ImageProcessorProps) 
   const { error, selectFiles, inspectImages, processImage } = useImageProcessing();
 
   const inputPaths = images.map((item) => item.path);
+  const isMultiSelection = images.length > 1;
+  const primaryImage = images[0];
   const commonExtension = getCommonExtension(inputPaths);
   const effectiveOutputFormat = convertFormat === 'none' ? commonExtension : convertFormat;
   const compressionFormat = effectiveOutputFormat === 'png'
@@ -201,7 +211,7 @@ export function ImageProcessor({ outputDir, concurrency }: ImageProcessorProps) 
       return;
     }
 
-    if (compressionFormat === 'jpg' && compressionType === 'preset') {
+    if (compressionFormat === 'jpg' && compressionType === 'indexedColor') {
       setCompressionType('none');
       return;
     }
@@ -210,6 +220,12 @@ export function ImageProcessor({ outputDir, concurrency }: ImageProcessorProps) 
       setCompressionType('none');
     }
   }, [compressionFormat, compressionType]);
+
+  useEffect(() => {
+    if (isMultiSelection && resizeMode === 'dimensions') {
+      setResizeWidth('');
+    }
+  }, [isMultiSelection, resizeMode]);
 
   useEffect(() => {
     let unlistenProcessing: (() => void) | undefined;
@@ -311,6 +327,25 @@ export function ImageProcessor({ outputDir, concurrency }: ImageProcessorProps) 
     setLocalError(null);
   };
 
+  const handleResizeWidthChange = (value: string) => {
+    setResizeWidth(value);
+  };
+
+  const handleResizeHeightChange = (value: string) => {
+    setResizeHeight(value);
+  };
+
+  const applyHeightPreset = (targetHeight: number) => {
+    setResizeHeight(String(targetHeight));
+
+    if (isMultiSelection || !primaryImage) {
+      setResizeWidth('');
+      return;
+    }
+
+    setResizeWidth(calculateWidthFromHeight(primaryImage.width, primaryImage.height, targetHeight));
+  };
+
   const buildOptions = (): ProcessingOptions | null => {
     const options: ProcessingOptions = {};
 
@@ -326,6 +361,17 @@ export function ImageProcessor({ outputDir, concurrency }: ImageProcessorProps) 
     if (resizeMode === 'dimensions') {
       const width = resizeWidth ? Number(resizeWidth) : undefined;
       const height = resizeHeight ? Number(resizeHeight) : undefined;
+
+      if (isMultiSelection) {
+        if (!height) {
+          setLocalError('多张图片时，请填写高度');
+          return null;
+        }
+
+        options.resizeMode = 'height';
+        options.resizeHeight = height;
+        return options;
+      }
 
       if (!width && !height) {
         setLocalError('请输入宽度或高度');
@@ -355,6 +401,11 @@ export function ImageProcessor({ outputDir, concurrency }: ImageProcessorProps) 
       options.compressionQuality = {
         percent: compressionQuality,
       };
+    }
+
+    if (compressionType === 'indexedColor') {
+      options.compressionType = compressionType;
+      options.compressionPreset = compressionPreset;
     }
 
     return options;
@@ -621,20 +672,35 @@ export function ImageProcessor({ outputDir, concurrency }: ImageProcessorProps) 
                 <input
                   type="number"
                   value={resizeWidth}
-                  onChange={(event) => setResizeWidth(event.target.value)}
-                  className="w-full rounded-lg border border-stone-300 bg-stone-50 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-950"
+                  onChange={(event) => handleResizeWidthChange(event.target.value)}
+                  disabled={isMultiSelection}
+                  className="w-full rounded-lg border border-stone-300 bg-stone-50 px-3 py-2 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-950"
                   placeholder="宽度"
                 />
                 <input
                   type="number"
                   value={resizeHeight}
-                  onChange={(event) => setResizeHeight(event.target.value)}
+                  onChange={(event) => handleResizeHeightChange(event.target.value)}
                   className="w-full rounded-lg border border-stone-300 bg-stone-50 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-950"
                   placeholder="高度"
                 />
               </div>
+              <div className="flex gap-2">
+                {[1080, 720, 480].map((height) => (
+                  <button
+                    key={height}
+                    onClick={() => applyHeightPreset(height)}
+                    type="button"
+                    className="flex-1 rounded-lg border border-stone-300 bg-stone-50 px-3 py-2 text-sm transition-colors hover:bg-stone-100 dark:border-zinc-700 dark:bg-zinc-950 dark:hover:bg-zinc-900"
+                  >
+                    高度 {height}
+                  </button>
+                ))}
+              </div>
               <p className="text-xs text-stone-500 dark:text-zinc-500">
-                只填宽度或高度时，会按原图比例自动计算另一边；两个都填时按输入值处理。
+                {isMultiSelection
+                  ? '多张图片时只允许填写高度，处理时会按每张原图比例自动计算宽度。'
+                  : '只填宽度或高度时，会按原图比例自动计算另一边；两个都填时按输入值处理。'}
               </p>
             </div>
           )}
@@ -672,29 +738,50 @@ export function ImageProcessor({ outputDir, concurrency }: ImageProcessorProps) 
         <div className="border-t border-stone-200 pt-4 dark:border-zinc-800">
           <label className="mb-2 block text-sm font-medium">压缩</label>
           {compressionFormat === 'png' && (
-            <div className="grid gap-2 md:grid-cols-2">
+            <div className="space-y-3">
+              <div className="grid gap-2 md:grid-cols-3">
+                <button
+                  onClick={() => setCompressionType('none')}
+                  className={`rounded-lg px-4 py-2 transition-colors ${
+                    compressionType === 'none'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-stone-100 text-stone-700 hover:bg-stone-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700'
+                  }`}
+                >
+                  不压缩
+                </button>
+                <button
+                  onClick={() => {
+                    setCompressionType('indexedColor');
+                    setCompressionPreset('256');
+                  }}
+                  className={`rounded-lg px-4 py-2 transition-colors ${
+                    compressionType === 'indexedColor' && compressionPreset === '256'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-stone-100 text-stone-700 hover:bg-stone-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700'
+                  }`}
+                >
+                  减色 256
+                </button>
+                <button
+                  onClick={() => {
+                    setCompressionType('indexedColor');
+                    setCompressionPreset('128');
+                  }}
+                  className={`rounded-lg px-4 py-2 transition-colors ${
+                    compressionType === 'indexedColor' && compressionPreset === '128'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-stone-100 text-stone-700 hover:bg-stone-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700'
+                  }`}
+                >
+                  减色 128
+                </button>
+              </div>
               <button
-                onClick={() => setCompressionType('none')}
-                className={`rounded-lg px-4 py-2 transition-colors ${
-                  compressionType === 'none'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-stone-100 text-stone-700 hover:bg-stone-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700'
-                }`}
+                type="button"
+                className="rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-left text-sm text-stone-500 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-400"
               >
-                不压缩
-              </button>
-              <button
-                onClick={() => {
-                  setCompressionType('preset');
-                  setCompressionPreset('standard');
-                }}
-                className={`rounded-lg px-4 py-2 transition-colors ${
-                  compressionType === 'preset'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-stone-100 text-stone-700 hover:bg-stone-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700'
-                }`}
-              >
-                自动
+                减色会把 PNG 转成索引色 PNG，适合图标、界面截图和颜色较少的图片。
               </button>
             </div>
           )}

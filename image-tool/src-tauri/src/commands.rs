@@ -82,6 +82,7 @@ enum CompressionPlan {
     Default,
     QualityPercent(u8),
     TargetSizeBytes(u64),
+    IndexedColor(u16),
 }
 
 const MAX_TOTAL_PIXELS: u64 = 80_000_000;
@@ -219,6 +220,17 @@ fn resolve_compression_plan(
             match output_format {
                 "png" | "jpg" | "jpeg" => Ok(CompressionPlan::TargetSizeBytes(target_bytes)),
                 _ => Err(format!("{output_format} 当前不支持目标比例压缩")),
+            }
+        }
+        "indexedColor" => {
+            if output_format != "png" {
+                return Err("减色仅支持 PNG 输出".to_string());
+            }
+
+            match options.compression_preset.as_deref().unwrap_or("256") {
+                "256" => Ok(CompressionPlan::IndexedColor(256)),
+                "128" => Ok(CompressionPlan::IndexedColor(128)),
+                other => Err(format!("不支持的 PNG 减色选项: {other}")),
             }
         }
         other => Err(format!("不支持的压缩类型: {other}")),
@@ -360,6 +372,13 @@ struct PngCandidate {
 fn png_candidate_for_preset(preset: &str) -> PngCandidate {
     match preset {
         "strong" => PngCandidate { max_colors: 96, quality: 55, speed: 10 },
+        _ => PngCandidate { max_colors: 256, quality: 82, speed: 10 },
+    }
+}
+
+fn png_candidate_for_indexed_color(max_colors: u16) -> PngCandidate {
+    match max_colors {
+        128 => PngCandidate { max_colors: 128, quality: 72, speed: 10 },
         _ => PngCandidate { max_colors: 256, quality: 82, speed: 10 },
     }
 }
@@ -619,6 +638,9 @@ fn save_with_plan(
                         quality
                     )));
                 }
+                CompressionPlan::IndexedColor(_) => {
+                    return Err("减色仅支持 PNG 输出".to_string());
+                }
             };
             if should_keep_original_jpeg(
                 original_format,
@@ -660,6 +682,24 @@ fn save_with_plan(
                     } else {
                         encode_png_bytes(img, PngCompressionType::Best)?
                     }
+                }
+                CompressionPlan::IndexedColor(max_colors) => {
+                    let candidate = png_candidate_for_indexed_color(*max_colors);
+                    if original_format == "png"
+                        && !did_resize
+                        && png_image_within_palette_limit(img, candidate.max_colors)
+                    {
+                        emit_processing_stage(app_handle, input_path, "writing", started_at);
+                        let original_bytes = fs::read(input_path)
+                            .map_err(|e| format!("读取原始 PNG 失败: {}", e))?;
+                        write_bytes(output_path, &original_bytes)?;
+                        return Ok(Some(format!(
+                            "PNG 原图颜色数已不超过 {} 色，已保留原图",
+                            candidate.max_colors
+                        )));
+                    }
+
+                    encode_png_smart_bytes(img, candidate)?
                 }
                 CompressionPlan::TargetSizeBytes(target) => {
                     if limit_expensive_png_processing {
@@ -855,6 +895,9 @@ fn process_single_image(
                 (*target as f64 / result.original_size.max(1) as f64) * 100.0
             ));
         }
+        CompressionPlan::IndexedColor(max_colors) => {
+            steps.push(format!("PNG 减色到 {} 色", max_colors));
+        }
         CompressionPlan::Default => {}
     }
     if output_format == "png" && limit_expensive_png_processing {
@@ -1044,6 +1087,14 @@ mod tests {
     }
 
     #[test]
+    fn height_resize_uses_original_width_for_aspect_ratio() {
+        assert_eq!(
+            calculate_resize_dimensions("height", 1600, 900, None, Some(720), None),
+            (1280, 720)
+        );
+    }
+
+    #[test]
     fn output_path_avoids_overwriting_input_file() {
         let dir = create_test_dir("overwrite-input");
         let input = dir.join("example.png");
@@ -1168,6 +1219,34 @@ mod tests {
 
         let plan = resolve_compression_plan("png", &options, 0).unwrap();
         assert_eq!(plan, CompressionPlan::QualityPercent(42));
+    }
+
+    #[test]
+    fn indexed_color_mode_maps_to_expected_palette_sizes() {
+        let options_256 = ProcessingOptions {
+            convert_format: Some("png".to_string()),
+            resize_mode: None,
+            resize_width: None,
+            resize_height: None,
+            resize_scale: None,
+            compression_type: Some("indexedColor".to_string()),
+            compression_preset: Some("256".to_string()),
+            compression_quality: None,
+            target_ratio: None,
+        };
+        let options_128 = ProcessingOptions {
+            compression_preset: Some("128".to_string()),
+            ..options_256.clone()
+        };
+
+        assert_eq!(
+            resolve_compression_plan("png", &options_256, 0).unwrap(),
+            CompressionPlan::IndexedColor(256)
+        );
+        assert_eq!(
+            resolve_compression_plan("png", &options_128, 0).unwrap(),
+            CompressionPlan::IndexedColor(128)
+        );
     }
 
     #[test]

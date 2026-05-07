@@ -4,8 +4,8 @@ export interface ProcessingOptions {
   resizeWidth?: number;
   resizeHeight?: number;
   resizeScale?: number;
-  compressionType?: 'none' | 'preset' | 'targetSize' | 'quality';
-  compressionPreset?: 'standard' | 'strong';
+  compressionType?: 'none' | 'preset' | 'targetSize' | 'quality' | 'indexedColor';
+  compressionPreset?: 'standard' | 'strong' | '256' | '128';
   compressionQuality?: CompressionQuality;
   targetRatio?: number;
 }
