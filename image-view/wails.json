@@ -1,0 +1,97 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "图片查看",
+  "outputfilename": "图片查看",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "liujinliang",
+    "email": "772532526@qq.com"
+  },
+  "info": {
+    "productName": "图片查看",
+    "companyName": "liujinliang",
+    "copyright": "Copyright 2025",
+    "fileAssociations": [
+      {
+        "ext": "jpg",
+        "name": "JPEG Image",
+        "description": "JPEG Image",
+        "iconName": "appicon",
+        "role": "Viewer"
+      },
+      {
+        "ext": "jpeg",
+        "name": "JPEG Image",
+        "description": "JPEG Image",
+        "iconName": "appicon",
+        "role": "Viewer"
+      },
+      {
+        "ext": "png",
+        "name": "PNG Image",
+        "description": "PNG Image",
+        "iconName": "appicon",
+        "role": "Viewer"
+      },
+      {
+        "ext": "gif",
+        "name": "GIF Image",
+        "description": "GIF Image",
+        "iconName": "appicon",
+        "role": "Viewer"
+      },
+      {
+        "ext": "bmp",
+        "name": "BMP Image",
+        "description": "BMP Image",
+        "iconName": "appicon",
+        "role": "Viewer"
+      },
+      {
+        "ext": "webp",
+        "name": "WebP Image",
+        "description": "WebP Image",
+        "iconName": "appicon",
+        "role": "Viewer"
+      },
+      {
+        "ext": "avif",
+        "name": "AVIF Image",
+        "description": "AVIF Image",
+        "iconName": "appicon",
+        "role": "Viewer"
+      },
+      {
+        "ext": "heic",
+        "name": "HEIC Image",
+        "description": "HEIC Image",
+        "iconName": "appicon",
+        "role": "Viewer"
+      },
+      {
+        "ext": "heif",
+        "name": "HEIF Image",
+        "description": "HEIF Image",
+        "iconName": "appicon",
+        "role": "Viewer"
+      },
+      {
+        "ext": "tif",
+        "name": "TIFF Image",
+        "description": "TIFF Image",
+        "iconName": "appicon",
+        "role": "Viewer"
+      },
+      {
+        "ext": "tiff",
+        "name": "TIFF Image",
+        "description": "TIFF Image",
+        "iconName": "appicon",
+        "role": "Viewer"
+      }
+    ]
+  }
+}
