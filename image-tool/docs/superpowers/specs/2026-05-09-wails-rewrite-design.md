@@ -1,61 +1,64 @@
-# Image Tool Wails Rewrite Design
+# Image Tool Wails 重写设计
 
-**Date:** 2026-05-09
+**日期：** 2026-05-09
 
-## Goal
+## 目标
 
-Rewrite the current desktop app from `Tauri + Rust` to `Wails v2 + Go` while preserving the existing React-based UI and the current end-user feature set as closely as practical.
+将当前桌面应用从 `Tauri + Rust` 重写为 `Wails v2 + Go`，同时尽量保留现有基于 React 的界面和当前用户可见的功能集合。
 
-This rewrite explicitly does **not** preserve the Rust image-processing implementation or its compression and palette-reduction strategy. The new implementation should instead follow the architectural direction used in `/opt/www/ai/image-view`: a Wails host, a Go backend, and a frontend that remains web-based.
+这次重写明确 **不保留** Rust 图片处理实现，也不追求与 Rust 版本完全一致的压缩或减色策略。新的实现方向参考 `/opt/www/ai/image-view`：使用 Wails 作为桌面宿主，Go 作为后端，前端仍然保持 Web 技术栈。
 
-## Confirmed Scope
+这次实现不在当前 `image-tool` 目录内原地改造，而是在上一级目录创建新的独立项目承接迁移工作。当前 `image-tool` 目录保留为旧版参考与迁移源。
 
-### In Scope
+## 已确认范围
 
-- Replace Tauri with Wails as the desktop host.
-- Replace the Rust backend with Go.
-- Keep the current React + TypeScript frontend where practical.
-- Preserve the current product feature set:
-  - format conversion
-  - image resizing
-  - image compression
-  - mask-to-transparency processing if it exists in the shipped UI flow
-  - batch processing with configurable concurrency
-  - local-only processing
-- Preserve the current general UI layout and interaction model unless migration forces small targeted changes.
-- Rebuild the desktop bridge layer:
-  - file selection
-  - output directory selection
-  - image inspection
-  - batch processing
-  - progress updates
+### 范围内
 
-### Out of Scope
+- 用 Wails 替换 Tauri 作为桌面宿主。
+- 用 Go 替换 Rust 后端。
+- 在上一级目录创建新的独立项目，而不是在当前目录内混合改造。
+- 尽量保留当前 React + TypeScript 前端。
+- 保留当前产品层面的功能集合：
+  - 格式转换
+  - 图片缩放
+  - 图片压缩
+  - 如果当前已交付 UI 中存在“蒙版转透明”流程，则继续保留
+  - 支持可配置并发的批量处理
+  - 所有处理本地完成
+- 尽量保留当前整体界面布局和交互模型，除非迁移本身要求做小范围调整。
+- 重建桌面桥接能力：
+  - 文件选择
+  - 输出目录选择
+  - 图片信息探测
+  - 批量处理
+  - 进度更新
 
-- Packaging and installer output
-- Build script migration for release artifacts
-- Reproducing the Rust algorithms exactly
-- Large visual redesigns
-- Cross-platform packaging behavior
+### 范围外
 
-## Current State Summary
+- 打包与安装包产物
+- 发布构建脚本迁移
+- 精确复刻 Rust 算法
+- 大幅度视觉重设计
+- 跨平台打包行为
 
-The existing project is a `Vite + React + TypeScript + TailwindCSS` frontend with a `Tauri + Rust` backend. The frontend currently depends on Tauri APIs for:
+## 当前状态摘要
 
-- opening file dialogs
-- opening output directory dialogs
-- invoking backend commands
-- listening for processing progress events
-- window drag-drop integration
+当前项目由 `Vite + React + TypeScript + TailwindCSS` 前端和 `Tauri + Rust` 后端组成。前端目前依赖 Tauri API 完成以下能力：
 
-The backend currently owns image inspection and processing. It emits per-file processing stage updates and returns structured result payloads to the frontend.
+- 打开文件选择对话框
+- 打开输出目录选择对话框
+- 调用后端命令
+- 监听处理进度事件
+- 处理窗口级拖拽文件事件
 
-## Recommended Architecture
+当前后端负责图片探测和图片处理，并向前端发出按文件粒度的处理阶段事件，同时返回结构化结果。
 
-Use a structure aligned to the reference Wails project:
+## 推荐架构
+
+整体结构对齐参考 Wails 项目，新项目建议创建为 `../image-tool-wails/`：
 
 ```text
-image-tool/
+../image-tool-wails/
 ├── backend/
 │   ├── app.go
 │   ├── processing/
@@ -81,77 +84,77 @@ image-tool/
 └── wails.json
 ```
 
-This keeps the desktop boundary narrow:
+这个结构保持桌面边界清晰：
 
-- `frontend/` renders UI and holds state
-- `backend/app.go` exposes Wails bindings
-- `backend/processing/` coordinates work and progress
-- `backend/imaging/` owns image transforms and file naming
+- `frontend/` 负责界面渲染和状态管理
+- `backend/app.go` 暴露 Wails 绑定方法
+- `backend/processing/` 负责调度和进度
+- `backend/imaging/` 负责图片转换、压缩和输出命名
 
-## Frontend Migration Design
+## 前端迁移设计
 
-The frontend should remain in React and TypeScript. The migration should minimize visual churn by preserving the existing component tree where that is reasonable.
+前端继续保留 React 和 TypeScript。迁移目标是尽量减少视觉波动，保留当前组件结构和交互习惯。
 
-### Keep
+### 保留内容
 
-- the overall page layout in `App.tsx`
-- the main `ImageProcessor` interaction model
-- the existing processing option model where it maps cleanly to Go
-- the current file list, progress list, and batch flow
+- `App.tsx` 中的整体页面布局
+- `ImageProcessor` 的主要交互模型
+- 当前处理选项模型，只在与 Go 数据结构对齐时做必要调整
+- 当前文件列表、进度展示和批处理流程
 
-### Replace
+### 替换内容
 
-- `@tauri-apps/api/core` `invoke` calls with Wails-generated Go bindings
-- Tauri dialog APIs with Wails runtime dialog usage exposed through Go methods
-- Tauri event listeners with Wails runtime event listeners
-- Tauri-specific drag-drop integration with either:
-  - Wails runtime events if sufficient, or
-  - a normal web drag-drop flow limited to file drops over the app content area
+- 将 `@tauri-apps/api/core` 的 `invoke` 调用替换成 Wails 生成的 Go 绑定
+- 将 Tauri 对话框 API 替换成经由 Go 暴露的 Wails 能力
+- 将 Tauri 事件监听替换成 Wails runtime 事件监听
+- 将 Tauri 专属拖拽集成替换为以下之一：
+  - 如果 Wails runtime 足够，则继续使用宿主事件
+  - 否则退回到页面内容区域内的普通 Web 拖拽文件处理
 
-### Frontend Boundary Rule
+### 前端边界约束
 
-The frontend should not own the authoritative batch-processing pipeline. It may format options, display progress, and manage drag-and-drop state, but file writes and image transformations should stay in Go.
+前端不应成为图片批处理的权威执行端。前端可以负责组装参数、显示进度、维护拖拽状态，但文件写入和图片变换应由 Go 后端负责。
 
-## Backend Module Design
+## 后端模块设计
 
 ### `backend/app.go`
 
-Responsibilities:
+职责：
 
-- expose Wails-bound methods to the frontend
-- store Wails context
-- validate top-level request shapes
-- translate frontend requests into service calls
+- 暴露供前端调用的 Wails 绑定方法
+- 保存 Wails 上下文
+- 校验顶层请求参数
+- 将前端请求转换成服务层调用
 
-Expected methods:
+预期方法：
 
 - `SelectFiles() ([]string, error)`
 - `SelectOutputDirectory() (string, error)`
 - `InspectImages(inputPaths []string) ([]ImageFileInfo, error)`
 - `ProcessImages(inputPaths []string, options ProcessingOptions, outputDir string, concurrency int) (BatchProcessResult, error)`
 
-`app.go` should not directly contain image algorithms.
+`app.go` 不应直接包含图片算法。
 
 ### `backend/processing/service.go`
 
-Responsibilities:
+职责：
 
-- schedule batch work
-- cap concurrency
-- aggregate file-level results
-- emit progress events
-- isolate per-file failures so one bad file does not abort the whole batch
+- 调度批处理任务
+- 控制最大并发数
+- 聚合单文件处理结果
+- 发送进度事件
+- 将单文件失败隔离，避免一个坏文件中断整批任务
 
-This module replaces the current Rust command orchestration and event emission.
+这一层用于替代当前 Rust 中的命令编排和事件发送。
 
 ### `backend/processing/events.go`
 
-Responsibilities:
+职责：
 
-- define event names and payloads
-- centralize Wails event emission
+- 定义事件名和事件载荷
+- 统一封装 Wails 事件发送
 
-Recommended event shape:
+推荐事件结构：
 
 ```json
 {
@@ -161,69 +164,69 @@ Recommended event shape:
 }
 ```
 
-The frontend should continue to consume stage-based updates similar to the current UI behavior.
+前端应继续沿用当前按阶段更新状态的展示模型。
 
 ### `backend/imaging/*`
 
-Responsibilities:
+职责：
 
-- decode source images
-- normalize orientation if the chosen Go stack supports EXIF orientation handling
-- resize images
-- convert formats
-- apply JPEG compression
-- apply PNG quantization / palette reduction
-- write output files with collision-safe names
+- 解码源图片
+- 如果所选 Go 技术栈支持，则做 EXIF 方向归一化
+- 执行缩放
+- 执行格式转换
+- 执行 JPEG 压缩
+- 执行 PNG 减色 / 调色板化
+- 生成无冲突的输出文件名并写入文件
 
-This layer must not depend on Wails types.
+这一层不能依赖 Wails 类型。
 
-## Image Processing Design
+## 图片处理设计
 
-The Rust implementation is intentionally discarded. The new Go pipeline should optimize for simple, understandable behavior and stable batch execution.
+Rust 实现会被完全放弃。新的 Go 处理管线应优先保证逻辑清晰、批处理稳定、行为可维护。
 
-### Input Support
+### 输入格式支持
 
-The app should continue to accept the image types currently surfaced by the UI where the Go stack can decode them reliably. If some formats from the current list are not realistically supported by the chosen Go libraries, the migration should narrow support explicitly in code and UI messaging rather than fail ambiguously.
+应用应尽量继续接受当前 UI 中允许选择的图片类型，但前提是所选 Go 解码库对这些格式有可靠支持。如果某些当前扩展名在 Go 方案下无法可靠处理，应在代码和 UI 提示中明确缩小支持范围，而不是让用户遇到含糊失败。
 
-### Resize Behavior
+### 缩放行为
 
-Support the current resize modes:
+继续支持当前缩放模式：
 
 - none
-- percentage scale
-- width-constrained
-- height-constrained
-- dimensions
+- 百分比缩放
+- 按宽度约束
+- 按高度约束
+- 指定尺寸
 
-Aspect-ratio-preserving behavior should remain the default unless both dimensions are explicitly supplied.
+除非用户显式同时给出宽高，否则默认保持宽高比。
 
-### Conversion Behavior
+### 转换行为
 
-Support output selection consistent with the current UI, but only for formats the Go encoder path can produce reliably.
+输出格式选择应尽量保持与当前 UI 一致，但只支持 Go 编码路径能够稳定产出的格式。
 
-### Compression Behavior
+### 压缩行为
 
-Compression behavior does not need to match Rust. It should instead be defined as:
+压缩行为不需要与 Rust 保持一致，应重新定义为：
 
-- JPEG: quality-based encoding with bounded quality inputs
-- PNG: either plain PNG encoding or indexed/palette PNG generation when the user chooses color reduction
+- JPEG：基于质量参数进行编码，并限制输入质量范围
+- PNG：普通 PNG 编码，或者在用户选择减色时输出索引色 / 调色板 PNG
 
-The reference project indicates a viable direction for PNG palette work. This rewrite may either:
+参考项目已经证明 PNG 调色板方向可行。这次重写可以选择：
 
-- implement quantization in Go, or
-- use a small frontend-assisted helper only if that remains invisible to the user and does not turn the frontend into the primary processing engine
+- 在 Go 中直接实现量化 / 减色
+- 仅在完全不暴露给用户、且不会让前端变成主处理引擎的前提下，使用一个很小的前端辅助模块
 
-The preferred design is still Go-owned processing.
+默认优先采用 Go 负责处理。
 
-### EXIF Orientation
+### EXIF 方向
 
-The previous backend normalized EXIF orientation. The new backend should preserve that user-visible behavior if feasible with the selected Go stack. If the chosen decoder path cannot do that reliably, the limitation must be made explicit during implementation and addressed before release.
+旧后端会处理 EXIF 方向。新后端如果所选 Go 技术栈可行，也应保留这一用户可见行为。如果最终所选解码路径无法稳定支持，必须在实现阶段明确暴露这个限制，并在交付前解决。
 
-### Progress Reporting
+### 进度上报
 
-Keep stage-based progress updates, not byte-stream progress. The frontend already maps named stages into percentages, and that model is sufficient for this tool.
+继续使用“处理阶段”而不是字节级进度。当前前端已经将阶段映射成百分比，这种模型对本工具足够。
 
-Recommended stages:
+推荐阶段：
 
 - `preparing`
 - `loading`
@@ -233,96 +236,98 @@ Recommended stages:
 - `done`
 - `error`
 
-## Data Flow
+## 数据流
 
-The target runtime flow is:
+目标运行流程如下：
 
-1. User selects files or drags files into the app.
-2. Frontend requests image inspection from Go.
-3. Go returns file metadata used to render the selection list.
-4. User chooses output directory and processing options.
-5. Frontend calls `ProcessImages(...)`.
-6. Go schedules per-file work under the requested concurrency limit.
-7. Go emits stage events during processing.
-8. Frontend updates each row status from those events.
-9. Go returns an aggregate batch result after all work completes.
+1. 用户通过按钮选择文件，或将文件拖入应用。
+2. 前端向 Go 请求图片探测信息。
+3. Go 返回文件元数据，用于渲染选择列表。
+4. 用户选择输出目录和处理选项。
+5. 前端调用 `ProcessImages(...)`。
+6. Go 按请求的并发上限调度每个文件的处理任务。
+7. Go 在处理过程中发出阶段事件。
+8. 前端根据事件更新每一行的状态。
+9. 全部任务结束后，Go 返回整批聚合结果。
 
-This keeps the frontend reactive and the backend authoritative.
+这样可以保持前端只负责响应式展示，后端负责真实执行。
 
-## Error Handling
+## 错误处理
 
-The rewrite should preserve tolerant batch behavior:
+重写后应保留“容错式批处理”行为：
 
-- invalid or unreadable files fail individually
-- unsupported format combinations fail individually
-- output write conflicts are resolved by unique output naming
-- one file failure does not terminate the whole batch unless the batch cannot start at all
+- 无效或无法读取的文件应单独失败
+- 不支持的格式组合应单独失败
+- 输出路径冲突通过唯一命名解决
+- 除非整批任务根本无法启动，否则单文件失败不应中断全部任务
 
-Error messages should stay user-facing and concise. The frontend should continue showing row-level failures and batch-level summary feedback.
+错误信息应继续面向用户，保持简洁。前端应继续展示单行失败状态和整批汇总反馈。
 
-## Testing Strategy
+## 测试策略
 
-Testing should focus on migration risk rather than pixel-perfect parity with the Rust backend.
+测试重点应放在迁移风险，而不是和 Rust 后端逐像素一致。
 
-### Go Tests
+### Go 测试
 
-- output path collision naming
-- resize dimension calculations
-- batch aggregation logic
-- concurrency limiting behavior
-- unsupported option validation
-- representative JPEG and PNG encode flows
+- 输出路径冲突命名
+- 缩放尺寸计算
+- 批处理结果聚合逻辑
+- 并发限制行为
+- 不支持选项的校验
+- 代表性的 JPEG 和 PNG 编码流程
 
-### Frontend Tests
+### 前端测试
 
-- option-to-request mapping
-- progress event handling
-- status transitions for success and failure
-- drag-drop selection behavior if rewritten
+- 选项到请求结构的映射
+- 进度事件处理
+- 成功 / 失败状态迁移
+- 如果拖拽逻辑重写，则覆盖拖拽选择行为
 
-### Manual Verification
+### 手工验证
 
-- select multiple mixed-format files
-- process to JPEG
-- process to PNG
-- resize by width, height, scale, and dimensions
-- run color reduction flow
-- verify output directory selection
-- verify per-file progress rendering
-- verify one broken file does not break the rest
+- 选择多个混合格式文件
+- 转成 JPEG
+- 转成 PNG
+- 按宽度、高度、比例、尺寸分别缩放
+- 执行减色流程
+- 验证输出目录选择
+- 验证单文件进度渲染
+- 验证单个坏文件不会影响其它文件
 
-## Migration Strategy
+## 迁移策略
 
-Implement the rewrite as a source-structure migration rather than an in-place hybrid.
+这次迁移采用“新项目承接旧项目”的方式，不在原目录内长期保留双宿主混合结构。
 
-Recommended sequence:
+应将这次重写作为一次源码结构迁移，而不是长期保留混合宿主。
 
-1. Scaffold Wails app structure alongside the current codebase.
-2. Move the React app into `frontend/` and make it build under Wails.
-3. Replace Tauri APIs with temporary Wails-compatible stubs.
-4. Build the Go backend bindings and data types.
-5. Reconnect image inspection.
-6. Reconnect batch processing and progress events.
-7. Remove Tauri and Rust code once the Wails path is working.
+推荐顺序：
 
-This sequence reduces the chance of breaking the UI and makes it easier to isolate migration regressions.
+1. 先在上一级目录创建新的 Wails 项目骨架。
+2. 将 React 应用迁移到 `frontend/` 并确保可在 Wails 下构建。
+3. 将 Tauri API 替换为临时的 Wails 兼容桩。
+4. 建立 Go 后端绑定和数据类型。
+5. 重新接通图片探测。
+6. 重新接通批处理和进度事件。
+7. 在 Wails 路径可工作后删除 Tauri 和 Rust 代码。
 
-## Risks
+这个顺序可以降低 UI 被一次性打断的风险，也更方便隔离迁移回归。
 
-- Go image library support may not cover every input format previously listed in the UI.
-- PNG color reduction quality may differ noticeably from the prior Rust implementation.
-- Wails drag-drop behavior may not map 1:1 to the current Tauri integration.
-- Large images may stress memory if the new Go implementation is naive.
+## 风险
 
-These risks are acceptable for the rewrite, but they must be handled explicitly during implementation and verification.
+- Go 图片库未必覆盖当前 UI 中列出的全部输入格式。
+- PNG 减色质量可能与之前的 Rust 实现差异明显。
+- Wails 的拖拽行为未必能与当前 Tauri 集成一比一对应。
+- 如果 Go 实现不够谨慎，大图处理会有明显内存压力。
 
-## Success Criteria
+这些风险对本次重写是可接受的，但必须在实现和验证阶段被显式处理。
 
-The rewrite is successful when:
+## 成功标准
 
-- the app runs under Wails
-- the frontend remains recognizably the same product
-- Rust and Tauri are removed from the runtime path
-- batch processing works end-to-end in Go
-- progress updates still render in the UI
-- the supported core flows work locally without server upload
+满足以下条件时，可认为重写成功：
+
+- 应用运行在 Wails 下
+- 前端仍然是用户能认出的同一款产品
+- Rust 和 Tauri 不再出现在运行路径中
+- Go 后端批处理可以端到端工作
+- 进度更新仍然能在 UI 中正确呈现
+- 核心流程继续本地执行，不依赖服务器上传
