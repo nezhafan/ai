@@ -1,5 +1,5 @@
 ### 说明
-AI 练手项目。 主要是用 `claude code` 和 `codex` 。右侧Release有打包好的APP。
+AI 练手项目。 主要使用 `claude code` 和 `codex` 。右侧Release有打包好的APP。
 
 
 ### 列表
