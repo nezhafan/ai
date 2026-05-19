@@ -34,6 +34,10 @@ export function selectImageFiles() {
   return callBinding<string[] | null | undefined>("SelectImageFiles");
 }
 
+export function selectImageFolder() {
+  return callBinding<string[] | null | undefined>("SelectImageFolder");
+}
+
 export function selectOutputDirectory() {
   return callBinding<string | null | undefined>("SelectOutputDirectory");
 }
@@ -65,4 +69,14 @@ export function processImages(
     options,
     outputDir,
   );
+}
+
+export function generatePreviews(inputPaths: string[]) {
+  const bindings = getBindings();
+  bindings?.GeneratePreviews?.(inputPaths);
+}
+
+export function triggerGC() {
+  const bindings = getBindings();
+  bindings?.TriggerGC?.();
 }

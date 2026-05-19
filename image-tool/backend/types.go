@@ -52,3 +52,8 @@ type ProcessingStageEvent struct {
 	Stage     string `json:"stage"`
 	ElapsedMs int64  `json:"elapsedMs"`
 }
+
+type PreviewEvent struct {
+	InputPath      string `json:"inputPath"`
+	PreviewDataURL string `json:"previewDataUrl"`
+}

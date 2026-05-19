@@ -57,8 +57,8 @@ export default function App() {
       <div className="flex min-h-screen flex-col lg:h-screen lg:flex-row">
         <aside className="flex w-full flex-col border-b border-zinc-800 bg-zinc-900/92 p-5 backdrop-blur lg:w-80 lg:border-b-0 lg:border-r">
           <div className="mb-8">
-            <h1 className="text-2xl font-bold">图片工具</h1>
-            <p className="mt-1 text-sm text-zinc-500">本地图片处理</p>
+            <h1 className="text-2xl font-bold">图片批量处理</h1>
+            <p className="mt-1 text-sm text-zinc-500">本地图片批量处理</p>
           </div>
 
           <div className="space-y-5">

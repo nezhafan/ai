@@ -1,4 +1,4 @@
-import type { ProcessingStageEvent, WailsRuntimeBindings } from "@/types";
+import type { PreviewEvent, ProcessingStageEvent, WailsRuntimeBindings } from "@/types";
 
 export type Unsubscribe = () => void;
 
@@ -29,4 +29,10 @@ export function listenImageProcessingStage(
   handler: (payload: ProcessingStageEvent) => void,
 ): Unsubscribe {
   return listenEvent<ProcessingStageEvent>("image-processing-stage", handler);
+}
+
+export function listenImagePreview(
+  handler: (payload: PreviewEvent) => void,
+): Unsubscribe {
+  return listenEvent<PreviewEvent>("image-preview", handler);
 }

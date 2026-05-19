@@ -33,7 +33,18 @@ func loadImage(path string) (image.Image, string, error) {
 	return img, format, nil
 }
 
-func generatePreview(img image.Image) string {
+func generatePreviewFromPath(inputPath string) string {
+	f, err := os.Open(inputPath)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	img, _, err := image.Decode(f)
+	if err != nil {
+		return ""
+	}
+
 	const previewSize = 128
 	bounds := img.Bounds()
 	w := bounds.Dx()
@@ -56,6 +67,7 @@ func generatePreview(img image.Image) string {
 
 	thumb := image.NewRGBA(image.Rect(0, 0, thumbW, thumbH))
 	xgdraw.CatmullRom.Scale(thumb, thumb.Bounds(), img, bounds, draw.Over, nil)
+	img = nil
 
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, thumb); err != nil {

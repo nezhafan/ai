@@ -1,13 +1,15 @@
 import { useEffect, useState, type DragEvent } from "react";
 import { useImageProcessing } from "@/hooks/useImageProcessing";
-import { listenImageProcessingStage } from "@/lib/events";
+import { listenImageProcessingStage, listenImagePreview } from "@/lib/events";
+import { generatePreviews, triggerGC } from "@/lib/wails";
 import type {
   ImageFileInfo,
+  PreviewEvent,
   ProcessingOptions,
   ProcessingStageEvent,
 } from "@/types";
 
-type ResizeMode = "none" | "scale" | "dimensions";
+type ResizeMode = "none" | "1080p" | "720p" | "custom";
 type CompressionType = "none" | "preset" | "quality" | "indexedColor";
 type CompressionPreset = "standard" | "128" | "256";
 type ConvertFormat = "none" | "png" | "jpg";
@@ -122,17 +124,6 @@ function getCommonExtension(paths: string[]) {
   return extensions.size === 1 ? [...extensions][0] : "";
 }
 
-function calculateWidthFromHeight(
-  width: number,
-  height: number,
-  targetHeight: number,
-) {
-  if (height <= 0 || targetHeight <= 0) {
-    return "";
-  }
-
-  return String(Math.max(1, Math.round((width / height) * targetHeight)));
-}
 
 function isSupportedImagePath(path: string) {
   const extension = path.split(".").pop()?.toLowerCase() || "";
@@ -213,20 +204,17 @@ export function ImageProcessor({
   const [resizeMode, setResizeMode] = useState<ResizeMode>("none");
   const [resizeWidth, setResizeWidth] = useState<string>("");
   const [resizeHeight, setResizeHeight] = useState<string>("");
-  const [resizeScale, setResizeScale] = useState<number>(50);
   const [compressionType, setCompressionType] =
     useState<CompressionType>("none");
   const [compressionPreset, setCompressionPreset] =
     useState<CompressionPreset>("standard");
-  const [compressionQuality, setCompressionQuality] = useState<number>(75);
+  const [compressionQuality, setCompressionQuality] = useState<number>(85);
   const [isProcessing, setIsProcessing] = useState(false);
 
-  const { error, selectFiles, inspectImages, processImage } =
+  const { error, selectFiles, selectFolder, inspectImages, processImage } =
     useImageProcessing();
 
   const inputPaths = images.map((item) => item.path);
-  const isMultiSelection = images.length > 1;
-  const primaryImage = images[0];
   const commonExtension = getCommonExtension(inputPaths);
   const effectiveOutputFormat =
     convertFormat === "none" ? commonExtension : convertFormat;
@@ -258,12 +246,6 @@ export function ImageProcessor({
   }, [compressionFormat, compressionType]);
 
   useEffect(() => {
-    if (isMultiSelection && resizeMode === "dimensions") {
-      setResizeWidth("");
-    }
-  }, [isMultiSelection, resizeMode]);
-
-  useEffect(() => {
     return listenImageProcessingStage((payload) => {
       setImages((current) =>
         current.map((item) =>
@@ -274,6 +256,18 @@ export function ImageProcessor({
                 processingElapsedMs: payload.elapsedMs,
                 status: payload.stage === "done" ? "done" : "processing",
               }
+            : item,
+        ),
+      );
+    });
+  }, []);
+
+  useEffect(() => {
+    return listenImagePreview((payload: PreviewEvent) => {
+      setImages((current) =>
+        current.map((item) =>
+          item.path === payload.inputPath
+            ? { ...item, previewDataUrl: payload.previewDataUrl }
             : item,
         ),
       );
@@ -301,10 +295,20 @@ export function ImageProcessor({
 
     setImages((current) => mergeImageInfo(current, inspected));
     setLocalError(null);
+    generatePreviews(newPaths);
   };
 
   const handleSelectFiles = async () => {
     const selected = await selectFiles();
+    if (selected.length === 0) {
+      return;
+    }
+
+    await appendSelectedPaths(selected);
+  };
+
+  const handleSelectFolder = async () => {
+    const selected = await selectFolder();
     if (selected.length === 0) {
       return;
     }
@@ -330,19 +334,6 @@ export function ImageProcessor({
     setResizeHeight(value);
   };
 
-  const applyHeightPreset = (targetHeight: number) => {
-    setResizeHeight(String(targetHeight));
-
-    if (isMultiSelection || !primaryImage) {
-      setResizeWidth("");
-      return;
-    }
-
-    setResizeWidth(
-      calculateWidthFromHeight(primaryImage.width, primaryImage.height, targetHeight),
-    );
-  };
-
   const buildOptions = (): ProcessingOptions | null => {
     const options: ProcessingOptions = {};
 
@@ -350,25 +341,19 @@ export function ImageProcessor({
       options.convertFormat = convertFormat;
     }
 
-    if (resizeMode === "scale") {
-      options.resizeMode = "scale";
-      options.resizeScale = resizeScale;
+    if (resizeMode === "1080p") {
+      options.resizeMode = "height";
+      options.resizeHeight = 1080;
     }
 
-    if (resizeMode === "dimensions") {
+    if (resizeMode === "720p") {
+      options.resizeMode = "height";
+      options.resizeHeight = 720;
+    }
+
+    if (resizeMode === "custom") {
       const width = resizeWidth ? Number(resizeWidth) : undefined;
       const height = resizeHeight ? Number(resizeHeight) : undefined;
-
-      if (isMultiSelection) {
-        if (!height) {
-          setLocalError("多张图片时，请填写高度");
-          return null;
-        }
-
-        options.resizeMode = "height";
-        options.resizeHeight = height;
-        return options;
-      }
 
       if (!width && !height) {
         setLocalError("请输入宽度或高度");
@@ -475,7 +460,7 @@ export function ImageProcessor({
 
     try {
       let nextIndex = 0;
-      const workerCount = Math.min(Math.max(concurrency, 1), 4, images.length);
+      const workerCount = Math.min(2, images.length);
 
       const runSingle = async (image: SelectedImage) => {
         setImages((current) =>
@@ -542,6 +527,7 @@ export function ImageProcessor({
       };
 
       await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+      triggerGC();
     } finally {
       setIsProcessing(false);
     }
@@ -587,16 +573,26 @@ export function ImageProcessor({
                 : "border-stone-300 bg-stone-50 dark:border-zinc-700 dark:bg-zinc-950"
             }`}
           >
-            <button onClick={handleSelectFiles} className="w-full text-left">
-              <p className="font-medium text-stone-900 dark:text-zinc-100">
-                {images.length > 0
-                  ? `已选择 ${images.length} 张图片，可继续追加`
-                  : "点击选择图片（支持多选）"}
-              </p>
-              <p className="mt-1 text-sm text-stone-500 dark:text-zinc-400">
-                也可以直接把图片拖进窗口，立即加入处理列表
-              </p>
-            </button>
+            <div className="flex gap-3">
+              <button onClick={handleSelectFiles} className="flex-1 text-left">
+                <p className="font-medium text-stone-900 dark:text-zinc-100">
+                  {images.length > 0
+                    ? `已选择 ${images.length} 张图片，可继续追加`
+                    : "选择图片（多选）"}
+                </p>
+                <p className="mt-1 text-sm text-stone-500 dark:text-zinc-400">
+                  也可以直接拖入窗口
+                </p>
+              </button>
+              <div className="flex items-center">
+                <button
+                  onClick={handleSelectFolder}
+                  className="rounded-lg border border-stone-300 bg-white px-4 py-2.5 text-sm font-medium text-stone-700 transition-colors hover:bg-stone-100 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
+                >
+                  选择文件夹
+                </button>
+              </div>
+            </div>
           </div>
 
           {images.length > 0 && (
@@ -612,11 +608,17 @@ export function ImageProcessor({
                     >
                       <div className="flex items-start gap-3">
                         <div className="shrink-0">
-                          <img
-                            src={image.previewDataUrl}
-                            alt={image.fileName}
-                            className="h-16 w-16 rounded-lg border border-stone-200 object-cover dark:border-zinc-800"
-                          />
+                          {image.previewDataUrl ? (
+                            <img
+                              src={image.previewDataUrl}
+                              alt={image.fileName}
+                              className="h-16 w-16 rounded-lg border border-stone-200 object-cover dark:border-zinc-800"
+                            />
+                          ) : (
+                            <div className="flex h-16 w-16 items-center justify-center rounded-lg border border-stone-200 bg-stone-100 text-xs text-stone-400 dark:border-zinc-800 dark:bg-zinc-800 dark:text-zinc-500">
+                              {image.fileName.split(".").pop()?.toUpperCase() || "IMG"}
+                            </div>
+                          )}
                         </div>
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-2">
@@ -681,8 +683,9 @@ export function ImageProcessor({
           <div className="mb-3 flex gap-2">
             {[
               ["none", "不缩放"],
-              ["scale", "百分比"],
-              ["dimensions", "宽高"],
+              ["1080p", "1080p"],
+              ["720p", "720p"],
+              ["custom", "自定义"],
             ].map(([value, label]) => (
               <button
                 key={value}
@@ -698,33 +701,27 @@ export function ImageProcessor({
             ))}
           </div>
 
-          {resizeMode === "scale" && (
-            <div>
-              <div className="mb-1 flex justify-between text-sm">
-                <span>缩放比例</span>
-                <span>{resizeScale}%</span>
-              </div>
-              <input
-                type="range"
-                min="1"
-                max="100"
-                value={resizeScale}
-                onChange={(event) => setResizeScale(Number(event.target.value))}
-                className="w-full"
-              />
-            </div>
+          {resizeMode === "1080p" && (
+            <p className="text-xs text-stone-500 dark:text-zinc-500">
+              将图片高度缩放到 1080 像素，宽度按原图比例自动计算。
+            </p>
           )}
 
-          {resizeMode === "dimensions" && (
+          {resizeMode === "720p" && (
+            <p className="text-xs text-stone-500 dark:text-zinc-500">
+              将图片高度缩放到 720 像素，宽度按原图比例自动计算。
+            </p>
+          )}
+
+          {resizeMode === "custom" && (
             <div className="space-y-3">
               <div className="grid grid-cols-2 gap-3">
                 <input
                   type="number"
                   value={resizeWidth}
                   onChange={(event) => handleResizeWidthChange(event.target.value)}
-                  disabled={isMultiSelection}
-                  className="w-full rounded-lg border border-stone-300 bg-stone-50 px-3 py-2 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-950"
-                  placeholder="宽度"
+                  className="w-full rounded-lg border border-stone-300 bg-stone-50 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-950"
+                  placeholder="宽度（可选）"
                 />
                 <input
                   type="number"
@@ -733,25 +730,11 @@ export function ImageProcessor({
                     handleResizeHeightChange(event.target.value)
                   }
                   className="w-full rounded-lg border border-stone-300 bg-stone-50 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-950"
-                  placeholder="高度"
+                  placeholder="高度（可选）"
                 />
               </div>
-              <div className="flex gap-2">
-                {[1080, 720, 480].map((height) => (
-                  <button
-                    key={height}
-                    onClick={() => applyHeightPreset(height)}
-                    type="button"
-                    className="flex-1 rounded-lg border border-stone-300 bg-stone-50 px-3 py-2 text-sm transition-colors hover:bg-stone-100 dark:border-zinc-700 dark:bg-zinc-950 dark:hover:bg-zinc-900"
-                  >
-                    高度 {height}
-                  </button>
-                ))}
-              </div>
               <p className="text-xs text-stone-500 dark:text-zinc-500">
-                {isMultiSelection
-                  ? "多张图片时只允许填写高度，处理时会按每张原图比例自动计算宽度。"
-                  : "只填宽度或高度时，会按原图比例自动计算另一边；两个都填时按输入值处理。"}
+                只填写其中一项时另一项自适应，两项都填时按输入值处理。
               </p>
             </div>
           )}

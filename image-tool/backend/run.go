@@ -12,7 +12,7 @@ func Run(assets fs.FS) {
 	app := NewApp()
 
 	err := wails.Run(&options.App{
-		Title:  "image-tool-wails",
+		Title:  "图片批量处理",
 		Width:  1280,
 		Height: 800,
 		AssetServer: &assetserver.Options{

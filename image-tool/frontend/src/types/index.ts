@@ -59,8 +59,14 @@ export interface ProcessingStageEvent {
   elapsedMs: number;
 }
 
+export interface PreviewEvent {
+  inputPath: string;
+  previewDataUrl: string;
+}
+
 export interface WailsAppBindings {
   SelectImageFiles?: () => Promise<string[] | null | undefined>;
+  SelectImageFolder?: () => Promise<string[] | null | undefined>;
   SelectOutputDirectory?: () => Promise<string | null | undefined>;
   GetDefaultOutputDirectory?: () => Promise<string | null | undefined>;
   InspectImages?: (inputPaths: string[]) => Promise<ImageFileInfo[]>;
@@ -74,6 +80,8 @@ export interface WailsAppBindings {
     options: ProcessingOptions,
     outputDir?: string,
   ) => Promise<BatchProcessResult>;
+  GeneratePreviews?: (inputPaths: string[]) => void;
+  TriggerGC?: () => void;
 }
 
 export interface WailsRuntimeBindings {

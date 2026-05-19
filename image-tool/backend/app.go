@@ -9,6 +9,7 @@ import (
 	_ "image/png"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,8 @@ import (
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
+
+var processSem = make(chan struct{}, 2)
 
 type App struct {
 	ctx context.Context
@@ -41,7 +44,7 @@ func (a *App) emitStage(inputPath string, stage string, elapsedMs int64) {
 }
 
 func (a *App) SelectImageFiles() ([]string, error) {
-	filePath, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+	paths, err := runtime.OpenMultipleFilesDialog(a.ctx, runtime.OpenDialogOptions{
 		Title: "选择图片文件",
 		Filters: []runtime.FileFilter{
 			{
@@ -53,10 +56,44 @@ func (a *App) SelectImageFiles() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if filePath == "" {
+	if paths == nil {
 		return []string{}, nil
 	}
-	return strings.Split(filePath, ";"), nil
+	return paths, nil
+}
+
+func (a *App) SelectImageFolder() ([]string, error) {
+	dir, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "选择包含图片的文件夹",
+	})
+	if err != nil {
+		return nil, err
+	}
+	if dir == "" {
+		return []string{}, nil
+	}
+
+	var imagePaths []string
+	extensions := map[string]bool{
+		".jpg": true, ".jpeg": true, ".png": true, ".webp": true,
+		".gif": true, ".bmp": true, ".tiff": true, ".avif": true,
+	}
+
+	filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			return nil
+		}
+		ext := strings.ToLower(filepath.Ext(path))
+		if extensions[ext] {
+			imagePaths = append(imagePaths, path)
+		}
+		return nil
+	})
+
+	return imagePaths, nil
 }
 
 func (a *App) SelectOutputDirectory() (string, error) {
@@ -86,11 +123,14 @@ func (a *App) InspectImages(inputPaths []string) ([]ImageFileInfo, error) {
 	results := make([]ImageFileInfo, 0, len(inputPaths))
 	var wg sync.WaitGroup
 	errCh := make(chan error, len(inputPaths))
+	sem := make(chan struct{}, 2)
 
 	for _, inputPath := range inputPaths {
 		wg.Add(1)
 		go func(path string) {
 			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
 			info, err := inspectSingleImage(path)
 			if err != nil {
 				errCh <- fmt.Errorf("读取 %s 失败: %w", filepath.Base(path), err)
@@ -128,29 +168,45 @@ func inspectSingleImage(inputPath string) (ImageFileInfo, error) {
 	}
 	defer f.Close()
 
-	img, _, err := image.Decode(f)
+	cfg, _, err := image.DecodeConfig(f)
 	if err != nil {
 		return ImageFileInfo{}, err
 	}
 
-	bounds := img.Bounds()
-	width := bounds.Dx()
-	height := bounds.Dy()
-
-	previewDataURL := generatePreview(img)
-
 	return ImageFileInfo{
-		Path:           inputPath,
-		FileName:       filepath.Base(inputPath),
-		Size:           fi.Size(),
-		Width:          width,
-		Height:         height,
-		PreviewDataURL: previewDataURL,
+		Path:     inputPath,
+		FileName: filepath.Base(inputPath),
+		Size:     fi.Size(),
+		Width:    cfg.Width,
+		Height:   cfg.Height,
 	}, nil
 }
 
 func (a *App) ProcessImage(inputPath string, options ProcessingOptions, outputDir string) (ProcessResult, error) {
-	return processSingleImage(a, inputPath, options, outputDir)
+	processSem <- struct{}{}
+	result, err := processSingleImage(a, inputPath, options, outputDir)
+	<-processSem
+	goruntime.GC()
+	return result, err
+}
+
+func (a *App) TriggerGC() {
+	goruntime.GC()
+}
+
+func (a *App) GeneratePreviews(inputPaths []string) {
+	for _, inputPath := range inputPaths {
+		processSem <- struct{}{}
+		previewDataURL := generatePreviewFromPath(inputPath)
+		<-processSem
+		if previewDataURL != "" {
+			runtime.EventsEmit(a.ctx, "image-preview", PreviewEvent{
+				InputPath:      inputPath,
+				PreviewDataURL: previewDataURL,
+			})
+		}
+	}
+	goruntime.GC()
 }
 
 func (a *App) ProcessImages(inputPaths []string, options ProcessingOptions, outputDir string) (BatchProcessResult, error) {
@@ -233,6 +289,7 @@ func processSingleImage(a *App, inputPath string, options ProcessingOptions, out
 
 	if options.ResizeMode != "" && options.ResizeMode != "none" {
 		processed = resizeImage(processed, options)
+		srcImg = nil
 		steps = append(steps, "已缩放")
 	}
 
@@ -262,6 +319,8 @@ func processSingleImage(a *App, inputPath string, options ProcessingOptions, out
 	emit("encoding")
 
 	compressionSteps, err := encodeImage(processed, outputPath, outputFormat, options)
+	srcImg = nil
+	processed = nil
 	if err != nil {
 		return ProcessResult{
 			Success:      false,

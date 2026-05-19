@@ -4,6 +4,7 @@ import {
   processImage as processImageWithWails,
   processImages as processImagesWithWails,
   selectImageFiles,
+  selectImageFolder,
   selectOutputDirectory,
 } from "@/lib/wails";
 import type {
@@ -31,6 +32,16 @@ export function useImageProcessing() {
       return selected ?? [];
     } catch (e) {
       setError(formatError("选择文件失败", e));
+      return [];
+    }
+  };
+
+  const selectFolder = async () => {
+    try {
+      const selected = await selectImageFolder();
+      return selected ?? [];
+    } catch (e) {
+      setError(formatError("选择文件夹失败", e));
       return [];
     }
   };
@@ -92,6 +103,7 @@ export function useImageProcessing() {
     loading,
     error,
     selectFiles,
+    selectFolder,
     selectOutputDirectory: selectOutput,
     inspectImages,
     processImage,

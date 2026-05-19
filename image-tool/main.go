@@ -3,7 +3,7 @@ package main
 import (
 	"embed"
 
-	"image-tool-wails/backend"
+	"image-tool/backend"
 )
 
 //go:embed all:frontend/dist

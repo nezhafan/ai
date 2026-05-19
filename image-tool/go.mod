@@ -1,4 +1,4 @@
-module image-tool-wails
+module image-tool
 
 go 1.25.0
 
