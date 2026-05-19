@@ -12,5 +12,5 @@ AI 练手项目。 主要使用 `claude code` 和 `codex` 。右侧Release有打
 - [浏览器视频播放器](browser-video-player) ：web页面美化视频播放器，直接引用 css 和 js , 添加元素 `<video class="video-player" src=""></video>` 即可。
 ![](./browser-video-player/demo.png)
 
-- [图片批量处理](image-tool) ：支持格式转换、压缩、缩放。
+- [图片批量处理](image-tool) ：用作批量处理图片，支持格式转换、压缩、缩放。
 ![](./image-tool/demo.png)
